@@ -37,6 +37,7 @@ struct VaultSettings {
     QStringList tagProperties;
     QStringList categoryTags;
     int minCategoryTags = 2; // vault health reports notes with fewer categories
+    QStringList pinnedTags;  // shown first in the tag pane, in this order
 
     // Vault-relative folder where attachments pasted into `notePath` go.
     QString attachmentFolderFor(QStringView notePath) const;

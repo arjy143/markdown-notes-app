@@ -229,3 +229,8 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
 - **Drill-down tree** (Tags tab, "Group by other tags"). Clicking a tag shows its notes as a folder-like tree. Each note is filed exactly once, at the path formed by its other tags: category tags first (in category order), then the remaining tags from most to least used, up to 4 levels deep. Branches with a single note are folded into their parent. "Plain list" shows the flat list instead.
 - **Fixed:** the editor theme was computed while the editor was still disabled (before a note opens), so headings got the disabled text colour. `Theme` now always reads the Active colour group.
 
+
+## 2026-11-23 — Pinned tags
+
+- **Pinned tags** (right-click a tag in the Tags tab: Pin to top, Unpin, Move up or down). They are listed first, in pin order, whatever the sort setting. A pinned nested tag (`tech/ai`) gets its own top-level entry under its full name and also stays in place under its parent. The pins are saved in `.markdown-notes/settings.json` as a new optional `pinnedTags` list. Older settings files without it still load, so the format version stays 1. A pin is kept even while no note has that tag, so it comes back when the tag does.
+- The app remembers which left tab (Files, Search, Tags or Tasks) was open, so a vault browsed by tags opens on the Tags tab.

@@ -103,6 +103,7 @@ void applyJson(VaultSettings& s, const QJsonObject& o)
     };
     if (o.contains(u"tagProperties"_s)) s.tagProperties = stringList(u"tagProperties"_s);
     if (o.contains(u"categoryTags"_s)) s.categoryTags = stringList(u"categoryTags"_s);
+    if (o.contains(u"pinnedTags"_s)) s.pinnedTags = stringList(u"pinnedTags"_s);
     if (o.contains(u"minCategoryTags"_s))
         s.minCategoryTags = std::clamp(o.value(u"minCategoryTags"_s).toInt(2), 0, 20);
     if (o.contains(u"templatesFolder"_s)) s.templatesFolder = o.value(u"templatesFolder"_s).toString();
@@ -204,6 +205,7 @@ bool saveVaultSettings(const QString& vaultRoot, const VaultSettings& s, QString
     o.insert(u"tagProperties"_s, QJsonArray::fromStringList(s.tagProperties));
     o.insert(u"categoryTags"_s, QJsonArray::fromStringList(s.categoryTags));
     o.insert(u"minCategoryTags"_s, s.minCategoryTags);
+    o.insert(u"pinnedTags"_s, QJsonArray::fromStringList(s.pinnedTags));
     if (!QDir().mkpath(vaultRoot + u"/.markdown-notes"_s)) {
         if (error) *error = u"Couldn't create the .markdown-notes folder."_s;
         return false;

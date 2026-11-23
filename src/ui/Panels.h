@@ -77,11 +77,16 @@ public:
     explicit TagPanel(VaultService* vault, QWidget* parent = nullptr);
     void refresh();
     void selectTag(const QString& tag);
+    // Pinned tags are listed first, in the order they were pinned (saved per vault).
+    void setPinned(const QString& tag, bool pinned);
+    void movePinned(const QString& tag, int delta);
 
 Q_SIGNALS:
     void openRequested(const QString& path, int line, const QString& findText);
 
 private:
+    void showMenu(const QPoint& pos);
+    void savePinned(const QStringList& pinned);
     void showFiles(const QString& tag);
     void fillNotes();
     void applySort();

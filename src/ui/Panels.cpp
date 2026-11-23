@@ -11,6 +11,8 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QSettings>
 #include <QSplitter>
@@ -18,6 +20,8 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+
+#include <limits>
 
 using namespace Qt::StringLiterals;
 
@@ -269,6 +273,30 @@ void BacklinksPanel::loadMentions()
 namespace {
 constexpr int kCountRole = Qt::UserRole + 4;
 constexpr int kCategoryRole = Qt::UserRole + 5;
+constexpr int kPinRole = Qt::UserRole + 6; // position in the pinned list (top-level items only)
+
+int pinRank(const QTreeWidgetItem& it)
+{
+    const QVariant v = it.data(0, kPinRole);
+    return v.isValid() ? v.toInt() : std::numeric_limits<int>::max();
+}
+
+// A small push-pin in the palette's accent colour.
+QIcon pinIcon(const QPalette& pal)
+{
+    QPixmap pm(32, 32);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QColor c = pal.color(QPalette::Active, QPalette::Highlight);
+    p.setPen(QPen(c, 3, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(16, 17), QPointF(16, 29));
+    p.setPen(Qt::NoPen);
+    p.setBrush(c);
+    p.drawRoundedRect(QRectF(10, 3, 12, 9), 2, 2);
+    p.drawRoundedRect(QRectF(6, 12, 20, 6), 2, 2);
+    return QIcon(pm);
+}
 
 // Sorts by name, or numerically by note count (ties stay alphabetical).
 class TagItem : public QTreeWidgetItem {
@@ -279,6 +307,10 @@ public:
         const int byName = text(0).compare(other.text(0), Qt::CaseInsensitive);
         const bool descending =
             treeWidget() != nullptr && treeWidget()->header()->sortIndicatorOrder() == Qt::DescendingOrder;
+        // Pinned tags come first, in pin order, whichever way the list is sorted.
+        const int pa = pinRank(*this);
+        const int pb = pinRank(other);
+        if (pa != pb) return descending ? pa > pb : pa < pb;
         // Category tags stay at the top whichever way the list is sorted.
         const bool cat = data(0, kCategoryRole).toBool();
         if (cat != other.data(0, kCategoryRole).toBool()) return descending ? !cat : cat;
@@ -329,6 +361,8 @@ TagPanel::TagPanel(VaultService* vault, QWidget* parent) : QWidget(parent), vaul
     connect(tree_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* it) {
         if (it) showFiles(it->data(0, kPathRole).toString());
     });
+    tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tree_, &QTreeWidget::customContextMenuRequested, this, &TagPanel::showMenu);
     connect(sort_, &QComboBox::currentIndexChanged, this, [this](int i) {
         QSettings().setValue(u"tags/sort"_s, i);
         applySort();
@@ -394,8 +428,99 @@ void TagPanel::refresh()
     for (auto it = nodes.cbegin(); it != nodes.cend(); ++it) {
         if (expanded.contains(it.key())) it.value()->setExpanded(true);
     }
+    // Pinned tags: a top-level tag moves to the top; a nested one ("tech/ai") gets its
+    // own top-level entry under its full name. Pins for tags no note has are skipped.
+    const QStringList& pinned = vault_->settings().pinnedTags;
+    if (!pinned.isEmpty()) {
+        const QIcon icon = pinIcon(palette());
+        int rank = 0;
+        QSet<QString> seen;
+        for (const QString& tag : pinned) {
+            const QString key = tag.toCaseFolded();
+            QTreeWidgetItem* node = nodes.value(key);
+            if (node == nullptr || seen.contains(key)) continue;
+            seen.insert(key);
+            if (node->parent() != nullptr) {
+                auto* top = new TagItem(tree_);
+                top->setText(0, u'#' + node->data(0, kPathRole).toString());
+                top->setData(0, kPathRole, node->data(0, kPathRole));
+                top->setText(1, node->text(1));
+                top->setData(1, kCountRole, node->data(1, kCountRole));
+                node = top;
+            }
+            node->setData(0, kPinRole, rank++);
+            node->setIcon(0, icon);
+            node->setToolTip(0, tr("Pinned tag"));
+        }
+    }
     applySort();
-    if (!current_.isEmpty()) showFiles(current_);
+    if (!current_.isEmpty()) {
+        // Keep the selected tag highlighted across refreshes.
+        for (QTreeWidgetItemIterator it(tree_); *it; ++it) {
+            if ((*it)->data(0, kPathRole).toString().compare(current_, Qt::CaseInsensitive) == 0) {
+                const QSignalBlocker block(tree_);
+                tree_->setCurrentItem(*it);
+                break;
+            }
+        }
+        showFiles(current_);
+    }
+}
+
+void TagPanel::showMenu(const QPoint& pos)
+{
+    QTreeWidgetItem* it = tree_->itemAt(pos);
+    if (it == nullptr) return;
+    const QString tag = it->data(0, kPathRole).toString();
+    const QStringList& pinned = vault_->settings().pinnedTags;
+    qsizetype index = -1;
+    for (qsizetype i = 0; i < pinned.size(); ++i) {
+        if (pinned[i].compare(tag, Qt::CaseInsensitive) == 0) index = i;
+    }
+    QMenu menu(this);
+    if (index < 0) {
+        menu.addAction(tr("Pin to top"), this, [this, tag] { setPinned(tag, true); });
+    } else {
+        menu.addAction(tr("Unpin"), this, [this, tag] { setPinned(tag, false); });
+        if (index > 0) menu.addAction(tr("Move up"), this, [this, tag] { movePinned(tag, -1); });
+        if (index + 1 < pinned.size())
+            menu.addAction(tr("Move down"), this, [this, tag] { movePinned(tag, 1); });
+    }
+    menu.exec(tree_->viewport()->mapToGlobal(pos));
+}
+
+void TagPanel::setPinned(const QString& tag, bool pinned)
+{
+    QStringList list = vault_->settings().pinnedTags;
+    list.removeIf([&](const QString& t) { return t.compare(tag, Qt::CaseInsensitive) == 0; });
+    if (pinned) list.append(tag);
+    savePinned(list);
+}
+
+void TagPanel::movePinned(const QString& tag, int delta)
+{
+    QStringList list = vault_->settings().pinnedTags;
+    for (qsizetype i = 0; i < list.size(); ++i) {
+        if (list[i].compare(tag, Qt::CaseInsensitive) != 0) continue;
+        const qsizetype j = i + delta;
+        if (j < 0 || j >= list.size()) return;
+        list.swapItemsAt(i, j);
+        savePinned(list);
+        return;
+    }
+}
+
+void TagPanel::savePinned(const QStringList& pinned)
+{
+    VaultSettings s = vault_->settings();
+    if (s.pinnedTags == pinned) return;
+    s.pinnedTags = pinned;
+    QString err;
+    if (!vault_->setSettings(s, &err)) {
+        QMessageBox::warning(this, tr("Tags"), tr("Couldn't save the pinned tags: %1").arg(err));
+        return;
+    }
+    refresh();
 }
 
 void TagPanel::applySort()

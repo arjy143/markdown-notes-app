@@ -73,6 +73,7 @@ private Q_SLOTS:
         s.tagProperties = {u"primary"_s, u"secondary"_s};
         s.categoryTags = {u"tech"_s, u"projects"_s};
         s.minCategoryTags = 3;
+        s.pinnedTags = {u"projects"_s, u"tech/ai"_s};
         QString err;
         QVERIFY(saveVaultSettings(dir.path(), s, &err));
         QCOMPARE(loadVaultSettings(dir.path()).settings, s);

@@ -101,6 +101,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     QSettings settings;
     restoreGeometry(settings.value(u"window/geometry"_s).toByteArray());
     splitter_->restoreState(settings.value(u"window/splitter"_s).toByteArray());
+    leftTabs_->setCurrentIndex(settings.value(u"window/leftTab"_s, 0).toInt());
     for (int i : {0, 2}) {
         // A pane hidden by an older version (or collapsed) can always be brought back.
         splitter_->widget(i)->setVisible(true);
@@ -1461,6 +1462,7 @@ void MainWindow::closeEvent(QCloseEvent* e)
     QSettings s;
     s.setValue(u"window/geometry"_s, saveGeometry());
     s.setValue(u"window/splitter"_s, splitter_->saveState());
+    s.setValue(u"window/leftTab"_s, leftTabs_->currentIndex());
     vault_->close();
     e->accept();
 }

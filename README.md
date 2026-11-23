@@ -23,7 +23,7 @@ Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows
 - **Vault health** (Tools): broken links, orphan and empty notes, unused attachments, look-alike tags, near-duplicate notes, and notes with too few category tags.
 - **Related notes** in the right panel, based on shared words, links and tags.
 - **Tasks** tab: every `- [ ]` in the vault, with due dates (`2025-01-31` or `due:2025-01-31`). Tick to complete; Delete removes a task.
-- **Tags as structure:** clicking a tag shows its notes as a tree grouped by their other tags. Vault settings can count properties like `primary` / `secondary` as tags and define category tags. Search accepts `#tag` filters.
+- **Tags as structure:** clicking a tag shows its notes as a tree grouped by their other tags. Right-click a tag to pin it to the top of the list. Vault settings can count properties like `primary` / `secondary` as tags and define category tags. Search accepts `#tag` filters.
 - **Link suggestions:** mentions of note names are underlined as you type; Alt+Enter links one.
 - **Quick capture:** `markdown-notes --capture` appends a line to `Inbox.md` (or today's daily note). Bind it to a global shortcut in your desktop settings.
 - **Appearance** (View): theme, accent colour, fonts, readable line length.

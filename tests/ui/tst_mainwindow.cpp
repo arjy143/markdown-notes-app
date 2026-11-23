@@ -521,6 +521,50 @@ private Q_SLOTS:
         sort->setCurrentIndex(0);
     }
 
+    void pinnedTagsComeFirst()
+    {
+        QTemporaryDir dir;
+        QVERIFY(test::writeBytes(dir.path() + u"/a.md"_s, "#alpha #gamma #tech/ai\n"));
+        QVERIFY(test::writeBytes(dir.path() + u"/b.md"_s, "#alpha #gamma\n"));
+        QVERIFY(test::writeBytes(dir.path() + u"/c.md"_s, "#alpha #beta\n"));
+        VaultService svc;
+        QSignalSpy spy(&svc, &VaultService::indexingFinished);
+        QString err;
+        QTemporaryDir cache;
+        QVERIFY(svc.open(dir.path(), &err, cache.path() + u"/index.sqlite"_s));
+        QVERIFY(spy.wait(10000));
+        TagPanel panel(&svc);
+        panel.refresh();
+        auto* tree = panel.findChild<QTreeWidget*>();
+        auto* sort = panel.findChild<QComboBox*>();
+        auto order = [&] {
+            QStringList out;
+            for (int i = 0; i < tree->topLevelItemCount(); ++i)
+                out.append(tree->topLevelItem(i)->text(0));
+            return out;
+        };
+        sort->setCurrentIndex(0);
+        panel.setPinned(u"gamma"_s, true);
+        panel.setPinned(u"Beta"_s, true);
+        QCOMPARE(order(), (QStringList{u"#gamma"_s, u"#beta"_s, u"#alpha"_s, u"#tech"_s}));
+        // Pins stay on top in pin order whichever way the rest is sorted.
+        sort->setCurrentIndex(1);
+        QCOMPARE(order(), (QStringList{u"#gamma"_s, u"#beta"_s, u"#alpha"_s, u"#tech"_s}));
+        sort->setCurrentIndex(2);
+        QCOMPARE(order(), (QStringList{u"#gamma"_s, u"#beta"_s, u"#tech"_s, u"#alpha"_s}));
+        sort->setCurrentIndex(0);
+        panel.movePinned(u"beta"_s, -1);
+        QCOMPARE(order().mid(0, 2), (QStringList{u"#beta"_s, u"#gamma"_s}));
+        // A nested tag gets its own top-level entry; its place in the tree stays.
+        panel.setPinned(u"tech/ai"_s, true);
+        QCOMPARE(order(), (QStringList{u"#beta"_s, u"#gamma"_s, u"#tech/ai"_s, u"#alpha"_s, u"#tech"_s}));
+        QCOMPARE(tree->topLevelItem(4)->child(0)->text(0), u"#ai"_s);
+        panel.setPinned(u"gamma"_s, false);
+        QCOMPARE(order(), (QStringList{u"#beta"_s, u"#tech/ai"_s, u"#alpha"_s, u"#gamma"_s, u"#tech"_s}));
+        // Saved in the vault's settings, so they survive a restart.
+        QCOMPARE(loadVaultSettings(dir.path()).settings.pinnedTags, (QStringList{u"Beta"_s, u"tech/ai"_s}));
+    }
+
     void headingsUseTheNormalTextColour()
     {
         // Regression: the theme was computed while the editor was disabled (no note
