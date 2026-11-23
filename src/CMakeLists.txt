@@ -37,6 +37,13 @@ target_link_libraries(mn_ui PUBLIC mn_core Qt6::Gui Qt6::Widgets PRIVATE microte
 
 # --- app ---------------------------------------------------------------------
 qt_add_executable(markdown-notes WIN32 app/main.cpp $<TARGET_OBJECTS:microtex_res>)
+if(WIN32)
+    target_sources(markdown-notes PRIVATE app/app.rc)
+endif()
+# Window icon (Wayland/KDE use the installed desktop file's icon instead).
+qt_add_resources(markdown-notes "app_icons" PREFIX "/icons" BASE ../packaging/icons
+    FILES ../packaging/icons/markdown-notes-32.png ../packaging/icons/markdown-notes-64.png
+          ../packaging/icons/markdown-notes-128.png ../packaging/icons/markdown-notes-256.png)
 target_link_libraries(markdown-notes PRIVATE mn_ui mn_warnings)
 set_target_properties(markdown-notes PROPERTIES OUTPUT_NAME markdown-notes)
 install(TARGETS markdown-notes RUNTIME DESTINATION bin)

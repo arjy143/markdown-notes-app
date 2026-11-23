@@ -5,6 +5,7 @@
 #include "ui/MainWindow.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QCommandLineParser>
 #include <QDateTime>
 #include <QDir>
@@ -38,6 +39,11 @@ int main(int argc, char* argv[])
     QApplication::setOrganizationName(u"markdown-notes"_s);
     QApplication::setApplicationVersion(u"0.1.0"_s);
     QApplication::setDesktopFileName(u"markdown-notes"_s);
+    {
+        QIcon icon;
+        for (int size : {32, 64, 128, 256}) icon.addFile(u":/icons/markdown-notes-%1.png"_s.arg(size));
+        QApplication::setWindowIcon(icon);
+    }
 
     QCommandLineParser cli;
     cli.setApplicationDescription(u"A lightweight editor for Obsidian vaults."_s);

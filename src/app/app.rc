@@ -1,0 +1,2 @@
+// Windows: the icon shown for markdown-notes.exe in Explorer and the taskbar.
+IDI_ICON1 ICON "../../packaging/windows/markdown-notes.ico"

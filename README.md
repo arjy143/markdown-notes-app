@@ -12,6 +12,8 @@ cmake --preset release && cmake --build --preset release
 ctest --preset debug    # tests (after building the debug preset)
 ```
 
+To install it for your user on Linux (launcher entry, icon, and a Meta+Shift+N quick-capture shortcut on KDE), run `./install.sh`. Use `--appimage FILE` to install an AppImage instead, `--desktop-icon` to add a desktop launcher, and `--uninstall` to remove it.
+
 Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows/build-zip.ps1` (portable zip).
 
 ## Beyond Obsidian
