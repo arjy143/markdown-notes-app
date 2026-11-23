@@ -22,7 +22,7 @@ Three goals, in priority order:
 ## Tech stack
 
 - C++20, CMake (with `CMakePresets.json`), Ninja.
-- Compilers: GCC or Clang on Linux, MSVC on Windows. Warnings on (`-Wall -Wextra -Wpedantic` / `/W4`), treated as errors in CI.
+- Compilers: GCC or Clang on Linux, MSVC on Windows. Warnings on (`-Wall -Wextra -Wpedantic` / `/W4`), treated as errors by the `ci` CMake preset (run locally; there is no hosted CI).
 - Qt 6 (current LTS or newer). Modules: **Core, Gui, Widgets** and **Test**, nothing else without asking. QtNetwork is reserved for the later semantic-search phase, behind a build option.
 - Vendored in `third_party/`, pinned to a version:
   - **md4c** (MIT). The Markdown parser, with Obsidian extensions layered on top (compat spec §2).
@@ -100,7 +100,7 @@ If these presets don't exist yet, create them as part of M0.
 
 ## Milestones (v1)
 
-- **M0 – Skeleton and spikes.** CMake presets, CI (Linux + Windows), an empty main window, a baseline memory measurement. Spike: heading font sizes in `QPlainTextEdit`. Spike: compare MicroTeX and JKQTMathText on quality, speed, size and maintenance, then pick one.
+- **M0 – Skeleton and spikes.** CMake presets, an empty main window, a baseline memory measurement. Spike: heading font sizes in `QPlainTextEdit`. Spike: compare MicroTeX and JKQTMathText on quality, speed, size and maintenance, then pick one.
 - **M1 – Core.** Vault scan, parser + Obsidian extensions, frontmatter subset, link resolution, SQLite index + cache, background indexer, file watcher. All compat-spec behaviour covered by fixture tests.
 - **M2 – Editor.** Open a vault, file tree, styled source editor, autosave (debounced ~1 s, plus on switching notes, losing focus and quitting), find/replace in note, back/forward history, Ctrl+click to follow links, `[[` autocomplete (files, then `#` headings, then `^` blocks), `#` tag autocomplete, creating a note from an unresolved link.
 - **M3 – Reading view.** Toggle with Ctrl+E. Covers images with sizes, note/heading/block embeds, math, callouts, tables, task lists, highlights, hidden comments, clickable links.
