@@ -1,0 +1,11 @@
+# Test fixtures contain deliberate CRLF, BOM, mixed and lone-CR line endings,
+# invalid UTF-8 and NUL bytes: git must never convert them.
+tests/fixtures/** -text
+
+# Vendored sources and fonts are kept exactly as upstream ships them.
+third_party/** -text
+*.ttf binary
+*.png binary
+
+# Scripts need Unix line endings even on Windows checkouts.
+*.sh text eol=lf

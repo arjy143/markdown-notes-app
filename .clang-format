@@ -1,0 +1,35 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 110
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: All
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterClass: false
+  AfterStruct: false
+  AfterNamespace: false
+  AfterEnum: false
+  AfterControlStatement: Never
+  BeforeElse: false
+  BeforeCatch: false
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<Q'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
+NamespaceIndentation: None
+FixNamespaceComments: true
+SortIncludes: CaseSensitive
+SpaceBeforeParens: ControlStatements
+Cpp11BracedListStyle: true
+InsertNewlineAtEOF: true

@@ -1,0 +1,32 @@
+--- /tmp/claude-1000/-home-arjun-code-Markdown-notes/e80a59f7-67f9-4b7e-a6ec-5c0197b07dee/scratchpad/md4c.orig.c	2026-11-22 19:35:30.358495702 +0000
++++ md4c.c	2026-11-22 19:35:30.386495663 +0000
+@@ -3775,6 +3775,11 @@
+ static void md_analyze_link_contents(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
+                                      int mark_beg, int mark_end);
+ 
++/* Markdown Notes patch: upstream hard-codes 100. Obsidian has no limit. */
++#ifndef MD4C_WIKILINK_MAX_DEST
++    #define MD4C_WIKILINK_MAX_DEST 100
++#endif
++
+ /* Try to resolve a bracket pair as a wiki link '[[destination]]' or
+  * '[[destination|label]]'.
+  * Returns true if resolved, false if not a wiki link, -1 on error. */
+@@ -3814,7 +3819,7 @@
+             break;
+         }
+         if(m->ch != _T('D')) {
+-            if(m->beg - opener->end > 100)
++            if(m->beg - opener->end > MD4C_WIKILINK_MAX_DEST)
+                 break;
+             if(m->ch != _T('D')  &&  (m->flags & MD_MARK_OPENER))
+                 delim_index = m->next;
+@@ -3824,7 +3829,7 @@
+ 
+     dest_beg = opener->end;
+     dest_end = (delim != NULL) ? delim->beg : closer->beg;
+-    if(dest_end - dest_beg == 0 || dest_end - dest_beg > 100)
++    if(dest_end - dest_beg == 0 || dest_end - dest_beg > MD4C_WIKILINK_MAX_DEST)
+         return false;
+ 
+     /* There may not be any new line in the destination. */

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Markdown Notes
+Comment=Read and write a folder of Markdown notes (Obsidian vault)
+Exec=markdown-notes %f
+Icon=markdown-notes
+Terminal=false
+Categories=Office;TextEditor;Utility;
+MimeType=inode/directory;text/markdown;
+StartupWMClass=markdown-notes
+Actions=Capture;
+
+[Desktop Action Capture]
+Name=Quick capture
+Exec=markdown-notes --capture

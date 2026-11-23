@@ -1,0 +1,9 @@
+{
+  "attachmentFolderPath": "./assets",
+  "newLinkFormat": "relative",
+  "useMarkdownLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "Inbox",
+  "alwaysUpdateLinks": true,
+  "strictLineBreaks": true
+}

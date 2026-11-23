@@ -1,0 +1,7 @@
+# LeakSanitizer suppressions for the asan preset.
+# MicroTeX keeps its font and symbol tables for the life of the process (tex::LaTeX::init).
+leak:tex::
+leak:third_party/microtex/
+# Qt GUI internals (font database / platform integration caches).
+leak:libQt6Gui.so
+leak:libfontconfig.so

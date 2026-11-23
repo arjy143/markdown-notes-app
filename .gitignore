@@ -1,0 +1,36 @@
+# Build output (all CMake presets build into build/<preset>, including the
+# AppImage and Windows zip produced by packaging/)
+/build/
+/out/
+CMakeUserPresets.json
+compile_commands.json
+*.AppImage
+*.zip
+
+# Tool caches
+/.cache/
+/.perf-lens/
+__pycache__/
+*.pyc
+
+# Benchmark results
+/bench/results/
+
+# Editors and IDEs
+.vscode/
+.idea/
+.vs/
+*.user
+*.user.*
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (personal, may contain permissions)
+.claude/settings.local.json
+
+# Crash dumps (not the bare name "core": that would match src/core/)
+core.[0-9]*
+vgcore.*

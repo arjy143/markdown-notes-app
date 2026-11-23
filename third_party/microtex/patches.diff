@@ -1,0 +1,11 @@
+--- a/src/latex.cpp
++++ b/src/latex.cpp
+@@ -56,7 +56,7 @@
+     char* userdata_fallback;
+     asprintf(&userdata_fallback, "%s/.local/share/clatexmath/", home);
+     paths.push(string(userdata_fallback));
+-    delete userdata_fallback;
++    free(userdata_fallback);  // Markdown Notes patch: asprintf memory must be freed with free()
+   }
+   paths.push("/usr/share/clatexmath/");
+   paths.push("/usr/local/share/clatexmath/");
