@@ -284,3 +284,17 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
   - An existing name is refused rather than opened.
   - Vaults without categories keep the old behaviour: an "Untitled" note is created straight away.
   - Notes created from links and the quick switcher are unchanged, because they already have a name and are meant to be quick.
+
+## 2026-11-24 — Images and drawings in quick capture
+
+- **Images:** pasting an image (a screenshot) or an image file into the capture box lists it as a thumbnail under the text. Ctrl+D or Draw opens a blank drawing, and double-clicking a thumbnail draws over that image. Delete removes one. Esc asks before discarding a capture that has images.
+- **Saving:** nothing is written until Enter. The images are then saved as new files in the attachment folder for the target note (inbox or today's daily note), named as Obsidian names pastes (`Pasted image YYYYMMDDHHmmss.png`, `Drawing YYYYMMDDHHmmss.png`). A dropped file keeps its name, and keeps its bytes unless it was drawn on. An embed per image follows the captured text, indented inside the list item, so `- 09:05 text` gains a `  ![[Pasted image ….png]]` line.
+  - This extends the quick-capture exception in `CLAUDE.md`: capture also creates new attachment files. It never changes an existing file other than the append.
+  - The target note is checked before any image is saved, so a binary target or a hidden attachment folder writes nothing. If the note can't be written, the images just saved are removed.
+- **Links** use the vault's link settings, through `newFileLink` (`core/links/NewLink`), which the editor's paste now shares. A shortest-form link uses the full path when another file already has the name. In-app the index answers that. The standalone `--capture` process has no index and treats the name as free, since the names carry the time to the second.
+  - The editor previously checked this for Markdown links only once two other files had the name. It now checks for any, like wikilinks.
+- **Drawings** are plain PNGs, so Obsidian shows them without plugins. The canvas has a pen, highlighter (semi-transparent, drawn as one path so crossings don't darken) and rectangle, five colours, three widths, undo, redo and clear.
+  - Widths are in screen pixels, converted to image pixels at the current zoom, and strokes are drawn onto the image at full size.
+  - Strokes stay editable until the capture is saved: reopening a drawing can undo them one at a time.
+  - Blank drawings are 1600×1000 on white, readable in light and dark themes. The background and finished strokes are cached at view size, so a stroke in progress doesn't rescale a large screenshot on each mouse move.
+  - Not included: pressure from pen tablets (Qt turns tablet input into mouse input), cropping, text, and annotating images already in notes.

@@ -2,6 +2,7 @@
 #include "core/index/VaultService.h"
 #include "core/vault/TextFile.h"
 #include "ui/Appearance.h"
+#include "ui/CaptureWindow.h"
 #include "ui/HealthDialog.h"
 #include "ui/HtmlRenderer.h"
 #include "ui/MainWindow.h"
@@ -361,6 +362,46 @@ private Q_SLOTS:
         QCOMPARE(pasted.size(), 1);
         QVERIFY(w.editor()->bufferText().contains(u"![["_s + pasted[0] + u"]]"_s));
         QVERIFY(!QImage(v.path(u"assets/"_s + pasted[0])).isNull());
+    }
+
+    void quickCaptureWithAnImage()
+    {
+        test::VaultCopy v(u"ui-vault"_s);
+        MainWindow w;
+        QVERIFY(w.openVault(v.root()));
+        QVERIFY(waitIndexed(w));
+        VaultSettings s = w.vault()->settings();
+        s.attachmentFolderPath = u"assets"_s;
+        QString err;
+        QVERIFY(w.vault()->setSettings(s, &err));
+        auto capture = [&w](const QString& text) {
+            QTimer::singleShot(0, &w, [&w, text] {
+                auto* box = w.findChild<CaptureWindow*>();
+                QVERIFY(box != nullptr);
+                QImage img(10, 10, QImage::Format_RGB32);
+                img.fill(Qt::red);
+                box->addImage(img);
+                box->editor()->setPlainText(text);
+                QTest::keyClick(box->editor(), Qt::Key_Return);
+            });
+            w.quickCapture();
+        };
+        auto pasted = [&v] { return QDir(v.path(u"assets"_s)).entryList({u"Pasted image *.png"_s}); };
+
+        // Inbox not open: written to disk.
+        capture(u"screenshot"_s);
+        QCOMPARE(pasted().size(), 1);
+        const QByteArray inbox = test::readBytes(v.path(u"Inbox.md"_s));
+        QVERIFY2(inbox.endsWith(QByteArray(" screenshot\n  ![[" + pasted()[0].toUtf8() + "]]\n")),
+                 inbox.constData());
+
+        // Inbox open: appended in the editor and saved.
+        QVERIFY(w.openNote(u"Inbox.md"_s));
+        capture(u"second"_s);
+        QCOMPARE(pasted().size(), 2);
+        const QString added = pasted().filter(u" 1.png"_s).value(0, pasted().last());
+        QVERIFY(w.editor()->bufferText().endsWith(u" second\n  ![["_s + added + u"]]\n"_s));
+        QCOMPARE(test::readBytes(v.path(u"Inbox.md"_s)), w.editor()->bufferText().toUtf8());
     }
 
     void appearanceRoundTripsAndApplies()

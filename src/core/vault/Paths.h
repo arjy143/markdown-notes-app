@@ -32,5 +32,8 @@ QString toVaultPath(const QString& root, const QString& absolute);
 QString toAbsolute(const QString& root, QStringView vaultPath);
 // True if `path` is inside `folder` (or equal to it), case-insensitively.
 bool isInside(QStringView path, QStringView folder);
+// The first of "folder/base.ext", "folder/base 1.ext", "folder/base 2.ext"… that
+// doesn't exist under `root`. Empty if none is free.
+QString uniqueVaultPath(const QString& root, QStringView folder, QStringView base, QStringView ext);
 
 } // namespace mn::paths

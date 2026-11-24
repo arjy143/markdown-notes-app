@@ -3,6 +3,7 @@
 #include "core/index/Similarity.h"
 #include "core/index/VaultService.h"
 #include "core/links/LinkSuggest.h"
+#include "core/links/NewLink.h"
 #include "core/parse/NoteMetadata.h"
 #include "core/tasks/TaskEdit.h"
 
@@ -252,6 +253,103 @@ private Q_SLOTS:
         QVERIFY(!appendCapture(v.root(), bad, u"x"_s).ok);
         QVERIFY(!QFile::exists(v.path(u".obsidian/inbox.md"_s)));
         QVERIFY(!appendCapture(v.root(), VaultSettings{}, u"   "_s).ok);
+    }
+
+    void newFileLinksFollowTheLinkSettings()
+    {
+        VaultSettings s;
+        const QString img = u"Files/a b.png"_s;
+        QCOMPARE(newFileLink(s, img, u"Notes/n.md"_s, false, true), u"![[a b.png]]"_s);
+        QCOMPARE(newFileLink(s, img, u"Notes/n.md"_s, true, true), u"![[Files/a b.png]]"_s);
+        QCOMPARE(newFileLink(s, u"Files/Note.md"_s, u"n.md"_s, false, false), u"[[Note]]"_s);
+        s.newLinkFormat = LinkStyle::Relative;
+        QCOMPARE(newFileLink(s, img, u"Notes/n.md"_s, false, true), u"![[../Files/a b.png]]"_s);
+        s.newLinkFormat = LinkStyle::Absolute;
+        QCOMPARE(newFileLink(s, img, u"Notes/n.md"_s, false, true), u"![[Files/a b.png]]"_s);
+        s.useMarkdownLinks = true;
+        QCOMPARE(newFileLink(s, img, u"Notes/n.md"_s, false, true), u"![a b](Files/a%20b.png)"_s);
+        s.newLinkFormat = LinkStyle::Shortest;
+        QCOMPARE(newFileLink(s, img, u"Notes/n.md"_s, false, false), u"[a b](a%20b.png)"_s);
+    }
+
+    void captureSavesImagesAndEmbedsThem()
+    {
+        test::VaultCopy v(u"health-vault"_s);
+        const auto before = test::snapshotTree(v.root());
+        VaultSettings s;
+        s.captureNote = u"Notes/Inbox.md"_s;
+        s.attachmentFolderPath = u"./assets"_s;
+        const QDateTime at(QDate(2025, 3, 4), QTime(9, 5));
+        const QString base = u"Pasted image 20250304090500"_s;
+        const QList<CaptureFile> two{{base, u"png"_s, "first"}, {base, u"png"_s, "second"}};
+        CaptureResult r = appendCapture(v.root(), s, u"look at this"_s, at, two);
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QCOMPARE(r.attachments, QStringList({u"Notes/assets/Pasted image 20250304090500.png"_s,
+                                             u"Notes/assets/Pasted image 20250304090500 1.png"_s}));
+        QCOMPARE(test::readBytes(v.path(r.attachments[0])), QByteArray("first"));
+        QCOMPARE(test::readBytes(v.path(r.attachments[1])), QByteArray("second"));
+        QCOMPARE(test::readBytes(v.path(u"Notes/Inbox.md"_s)),
+                 QByteArray("- 09:05 look at this\n"
+                            "  ![[Pasted image 20250304090500.png]]\n"
+                            "  ![[Pasted image 20250304090500 1.png]]\n"));
+
+        // Only a drawing, no text; a name used elsewhere gets the full path.
+        r = appendCapture(v.root(), s, u"  "_s, at, {{u"Drawing 1"_s, u"png"_s, "d"}},
+                          [](const QString& name) { return name == u"Drawing 1.png"_s; });
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QVERIFY(test::readBytes(v.path(u"Notes/Inbox.md"_s))
+                    .endsWith("- 09:05 ![[Notes/assets/Drawing 1.png]]\n"));
+
+        // Nothing else was touched.
+        auto after = test::snapshotTree(v.root());
+        for (const QString& p : {u"Notes/Inbox.md"_s, u"Notes/assets/Drawing 1.png"_s,
+                                 u"Notes/assets/Pasted image 20250304090500.png"_s,
+                                 u"Notes/assets/Pasted image 20250304090500 1.png"_s})
+            after.remove(p);
+        QCOMPARE(after, before);
+    }
+
+    void captureWithImagesWritesNothingOnFailure()
+    {
+        test::VaultCopy v(u"health-vault"_s);
+        const QDateTime at(QDate(2025, 3, 4), QTime(9, 5));
+        const QList<CaptureFile> img{{u"Pasted image x"_s, u"png"_s, "png"}};
+        auto attachmentCount = [&] { return QDir(v.path(u"Attachments"_s)).entryList(QDir::Files).size(); };
+        VaultSettings s;
+        s.attachmentFolderPath = u"Attachments"_s;
+
+        // The target isn't a text note: refused before any image is saved.
+        QVERIFY(test::writeBytes(v.path(u"Inbox.md"_s), QByteArray("\xff\xfe\x00\x01", 4)));
+        CaptureResult r = appendCapture(v.root(), s, u"x"_s, at, img);
+        QVERIFY(!r.ok);
+        QCOMPARE(attachmentCount(), 0);
+        QCOMPARE(test::readBytes(v.path(u"Inbox.md"_s)), QByteArray("\xff\xfe\x00\x01", 4));
+
+        // A hidden attachment folder is refused, and the note is left alone.
+        s.captureNote = u"Project log.md"_s;
+        const QByteArray log = test::readBytes(v.path(u"Project log.md"_s));
+        s.attachmentFolderPath = u".hidden"_s;
+        r = appendCapture(v.root(), s, u"x"_s, at, img);
+        QVERIFY(!r.ok);
+        QVERIFY(!QFileInfo::exists(v.path(u".hidden"_s)));
+        QCOMPARE(test::readBytes(v.path(u"Project log.md"_s)), log);
+
+        // The note can't be written: the images just saved are removed again.
+        s.attachmentFolderPath = u"Attachments"_s;
+        s.captureNote = u"Locked/Inbox.md"_s;
+        QVERIFY(QDir().mkpath(v.path(u"Locked"_s)));
+        QVERIFY(test::writeBytes(v.path(u"Locked/Inbox.md"_s), "- old\n"));
+        QFile::setPermissions(v.path(u"Locked"_s), QFile::ReadOwner | QFile::ExeOwner);
+        if (QFile probe(v.path(u"Locked/probe"_s)); probe.open(QIODevice::WriteOnly)) {
+            QFile::setPermissions(v.path(u"Locked"_s),
+                                  QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+            QSKIP("Running with permissions that ignore read-only folders.");
+        }
+        r = appendCapture(v.root(), s, u"x"_s, at, img);
+        QFile::setPermissions(v.path(u"Locked"_s), QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        QVERIFY(!r.ok);
+        QCOMPARE(attachmentCount(), 0);
+        QCOMPARE(test::readBytes(v.path(u"Locked/Inbox.md"_s)), QByteArray("- old\n"));
     }
 
     void dailyNotesSettingsImported()

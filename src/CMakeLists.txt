@@ -10,6 +10,7 @@ add_library(mn_core STATIC
     core/links/FileIndex.cpp core/links/FileIndex.h
     core/links/RenamePlanner.cpp core/links/RenamePlanner.h
     core/links/LinkSuggest.cpp core/links/LinkSuggest.h
+    core/links/NewLink.cpp core/links/NewLink.h
     core/index/Sqlite.cpp core/index/Sqlite.h
     core/index/IndexTypes.h
     core/index/IndexStore.cpp core/index/IndexStore.h

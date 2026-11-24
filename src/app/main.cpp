@@ -5,12 +5,12 @@
 #include "ui/MainWindow.h"
 
 #include <QApplication>
-#include <QIcon>
 #include <QCommandLineParser>
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QIcon>
 #include <QMessageBox>
 #include <QSettings>
 #include <QTimer>
@@ -41,7 +41,8 @@ int main(int argc, char* argv[])
     QApplication::setDesktopFileName(u"markdown-notes"_s);
     {
         QIcon icon;
-        for (int size : {32, 64, 128, 256}) icon.addFile(u":/icons/markdown-notes-%1.png"_s.arg(size));
+        for (int size : {32, 64, 128, 256})
+            icon.addFile(u":/icons/markdown-notes-%1.png"_s.arg(size));
         QApplication::setWindowIcon(icon);
     }
 
@@ -78,7 +79,9 @@ int main(int argc, char* argv[])
         const mn::VaultSettings settings = mn::loadVaultSettings(root).settings;
         mn::ui::CaptureWindow box(mn::captureTargetPath(settings, QDateTime::currentDateTime()));
         QObject::connect(&box, &mn::ui::CaptureWindow::submitted, &box, [&](const QString& text) {
-            const mn::CaptureResult r = mn::appendCapture(root, settings, text);
+            // No index here; the attachment names carry the time to the second.
+            const QDateTime now = QDateTime::currentDateTime();
+            const mn::CaptureResult r = mn::appendCapture(root, settings, text, now, box.files(now));
             if (r.ok)
                 box.accept();
             else

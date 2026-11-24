@@ -22,6 +22,7 @@
 #include "core/capture/Capture.h"
 #include "core/index/IndexStore.h"
 #include "core/index/VaultService.h"
+#include "core/links/NewLink.h"
 #include "core/links/RenamePlanner.h"
 #include "core/parse/NoteMetadata.h"
 #include "core/templates/Templates.h"
@@ -73,16 +74,6 @@ namespace mn::ui {
 namespace {
 
 constexpr int kAutosaveMs = 1000;
-
-QString uniqueName(const QString& root, const QString& folder, const QString& base, const QString& ext)
-{
-    for (int i = 0; i < 10000; ++i) {
-        const QString name = i == 0 ? QString(base + ext) : QString(base + u' ' + QString::number(i) + ext);
-        if (!QFileInfo::exists(paths::toAbsolute(root, paths::join(folder, name))))
-            return paths::join(folder, name);
-    }
-    return {};
-}
 
 } // namespace
 
@@ -948,7 +939,7 @@ void MainWindow::newNote()
 void MainWindow::newNoteIn(const QString& folder)
 {
     if (!vault_->isOpen()) return;
-    const QString path = uniqueName(vault_->root(), folder, u"Untitled"_s, u".md"_s);
+    const QString path = paths::uniqueVaultPath(vault_->root(), folder, u"Untitled"_s, u".md"_s);
     if (path.isEmpty()) return;
     QString name = paths::linkName(path);
     QByteArray content;
@@ -1211,25 +1202,16 @@ QString MainWindow::handleAttachment(const QMimeData* mime)
             tr("The attachment folder “%1” isn't allowed: %2").arg(folder, checkNewVaultPath(folder)));
         return {};
     }
-    auto linkFor = [&](const QString& path, bool embed) -> QString {
-        if (st.useMarkdownLinks) {
-            const QString lp = vault_->files().linkpathFor(path, note_.path, st.newLinkFormat, true);
-            return QString(embed ? u"!"_s : QString()) + u'[' + paths::completeBaseName(path) + u"]("_s +
-                   encodeMarkdownPath(lp) + u')';
-        }
-        // The new file isn't in the index yet: use its name unless it would be ambiguous.
-        QString lp = st.newLinkFormat == LinkStyle::Absolute ? path
-                     : st.newLinkFormat == LinkStyle::Relative
-                         ? paths::relativePath(paths::folderOf(note_.path), path)
-                         : (vault_->files().filesNamed(paths::fileName(path)) ? path : paths::fileName(path));
-        if (classifyPath(path) == FileKind::Note && lp.endsWith(u".md"_s)) lp.chop(3);
-        return QString(embed ? u"!"_s : QString()) + u"[["_s + lp + u"]]"_s;
+    auto linkFor = [&](const QString& path, bool embed) {
+        // The new file isn't in the index yet: any file with its name makes the short form ambiguous.
+        return newFileLink(st, path, note_.path, vault_->files().filesNamed(paths::fileName(path)) != nullptr,
+                           embed);
     };
     if (mime->hasImage()) {
         const QImage img = qvariant_cast<QImage>(mime->imageData());
         if (img.isNull()) return {};
         const QString base = u"Pasted image "_s + QDateTime::currentDateTime().toString(u"yyyyMMddHHmmss"_s);
-        const QString path = uniqueName(vault_->root(), folder, base, u".png"_s);
+        const QString path = paths::uniqueVaultPath(vault_->root(), folder, base, u".png"_s);
         const QString abs = vault_->absolutePath(path);
         QDir().mkpath(QFileInfo(abs).absolutePath());
         QSaveFile f(abs);
@@ -1254,8 +1236,8 @@ QString MainWindow::handleAttachment(const QMimeData* mime)
             }
             if (!isAttachmentKind(kind)) continue;
             // Copy outside files into the attachment folder.
-            const QString path =
-                uniqueName(vault_->root(), folder, fi.completeBaseName(), u'.' + fi.suffix());
+            const QString path = paths::uniqueVaultPath(vault_->root(), folder, fi.completeBaseName(),
+                                                        QString(u'.' + fi.suffix()));
             const QString abs = vault_->absolutePath(path);
             QDir().mkpath(QFileInfo(abs).absolutePath());
             if (!QFile::copy(fi.absoluteFilePath(), abs)) {
@@ -1383,26 +1365,36 @@ void MainWindow::quickCapture()
     CaptureWindow dlg(target, this);
     connect(&dlg, &CaptureWindow::submitted, &dlg, [this, &dlg, &st, target](const QString& text) {
         const QDateTime at = QDateTime::currentDateTime();
+        const QList<CaptureFile> files = dlg.files(at);
+        const NameInUse nameInUse = [this](const QString& name) {
+            return vault_->files().filesNamed(name) != nullptr;
+        };
         if (target == note_.path && !note_.readOnly) {
             // The target is open: append in the editor (undoable) and save.
+            const SavedFiles saved = saveCaptureFiles(vault_->root(), st, target, files, nameInUse);
+            if (!saved.ok) {
+                dlg.showError(saved.error);
+                return;
+            }
+            if (!saved.paths.isEmpty()) vault_->refresh(saved.paths);
             QTextCursor c(editor_->document());
             c.movePosition(QTextCursor::End);
             c.beginEditBlock();
             const QString buffer = editor_->bufferText();
             if (!buffer.isEmpty() && !buffer.endsWith(u'\n')) c.insertText(u"\n"_s);
-            c.insertText(formatCapture(st, text, at) + u'\n');
+            c.insertText(formatCapture(st, captureTextWithEmbeds(text, saved.links), at) + u'\n');
             c.endEditBlock();
             if (!saveNow()) {
                 dlg.showError(tr("The note couldn't be saved; your capture is in the editor."));
                 return;
             }
         } else {
-            const CaptureResult r = appendCapture(vault_->root(), st, text, at);
+            const CaptureResult r = appendCapture(vault_->root(), st, text, at, files, nameInUse);
             if (!r.ok) {
                 dlg.showError(r.error);
                 return;
             }
-            vault_->refresh({r.path});
+            vault_->refresh(QStringList(r.attachments) << r.path);
         }
         statusBar()->showMessage(tr("Captured to %1").arg(target), 4000);
         dlg.accept();

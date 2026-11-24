@@ -1,6 +1,7 @@
 #include "Paths.h"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QStringList>
 
 namespace mn::paths {
@@ -87,6 +88,18 @@ QString toAbsolute(const QString& root, QStringView vaultPath)
 {
     if (vaultPath.isEmpty()) return root;
     return root + u'/' + vaultPath;
+}
+
+QString uniqueVaultPath(const QString& root, QStringView folder, QStringView base, QStringView ext)
+{
+    for (int i = 0; i < 10000; ++i) {
+        QString name = base.toString();
+        if (i > 0) name += u' ' + QString::number(i);
+        name += ext;
+        const QString path = join(folder, name);
+        if (!QFileInfo::exists(toAbsolute(root, path))) return path;
+    }
+    return {};
 }
 
 bool isInside(QStringView path, QStringView folder)
