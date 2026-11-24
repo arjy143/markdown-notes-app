@@ -6,6 +6,7 @@
 #include "FindBar.h"
 #include "HealthDialog.h"
 #include "MarkdownHighlighter.h"
+#include "NewNoteDialog.h"
 #include "NoteEditor.h"
 #include "Panels.h"
 #include "QuickSwitcher.h"
@@ -372,7 +373,7 @@ void MainWindow::buildMenus()
     leftPaneAction_->setCheckable(true);
     leftPaneAction_->setShortcut(QKeySequence(u"Ctrl+Shift+B"_s));
     connect(leftPaneAction_, &QAction::triggered, this, [this](bool on) { setPaneVisible(0, on); });
-    rightPaneAction_ = view->addAction(tr("&Right panel (links and related notes)"));
+    rightPaneAction_ = view->addAction(tr("&Right panel"));
     rightPaneAction_->setCheckable(true);
     rightPaneAction_->setShortcut(QKeySequence(u"Ctrl+Shift+R"_s));
     connect(rightPaneAction_, &QAction::triggered, this, [this](bool on) { setPaneVisible(2, on); });
@@ -455,11 +456,11 @@ void MainWindow::buildAssistant()
     connect(assistant_, &ai::Assistant::indexProgress, this, [this](int done, int total) {
         aiStatus_->setVisible(done < total);
         aiStatus_->setText(tr("Semantic index %1/%2").arg(done).arg(total));
-        aiStatus_->setToolTip(tr("Embedding passages for semantic search"));
+        aiStatus_->setToolTip(tr("Building semantic index"));
     });
     connect(assistant_, &ai::Assistant::indexError, this, [this](const QString& message) {
-        aiStatus_->setText(tr("Semantic index paused"));
-        aiStatus_->setToolTip(message + u"\n\n"_s + tr("Tools › Update semantic index tries again."));
+        aiStatus_->setText(tr("Semantic index error"));
+        aiStatus_->setToolTip(message + u"\n\n"_s + tr("Retry with Tools › Update semantic index."));
         aiStatus_->show();
     });
     assistant_->setConfig(ai::AiConfig::load());
@@ -486,7 +487,7 @@ void MainWindow::suggestFrontmatter()
         if (!assistant_->config().chatReady()) return;
     }
     const QString path = note_.path;
-    statusBar()->showMessage(tr("Asking the model about %1…").arg(paths::linkName(path)));
+    statusBar()->showMessage(tr("Generating suggestions for %1…").arg(paths::linkName(path)));
     assistant_->suggestFrontmatter(path, editor_->bufferText(),
                                    [this, path](const ai::FrontmatterSuggestion& s) {
                                        statusBar()->clearMessage();
@@ -612,7 +613,7 @@ bool MainWindow::saveNow()
     const FileStamp now = statFile(abs);
     if (!now.exists()) {
         note_.orphaned = true;
-        showBanner(tr("This note was deleted or moved outside the app. Your text is kept here."),
+        showBanner(tr("This note no longer exists on disk. Its contents remain in the editor."),
                    tr("Recreate file"), [this] {
                        note_.orphaned = false;
                        note_.diskRaw.clear();
@@ -626,8 +627,8 @@ bool MainWindow::saveNow()
         if (disk.raw != note_.diskRaw) {
             const auto choice = QMessageBox::warning(
                 this, tr("Note changed on disk"),
-                tr("“%1” was changed by another program while you were editing it.\n\n"
-                   "Overwrite it with your version, or reload it and discard your edits?")
+                tr("“%1” was modified by another program.\n\n"
+                   "Overwrite it with your version, or reload it and discard your changes?")
                     .arg(note_.path),
                 QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
             if (choice == QMessageBox::Discard) {
@@ -646,9 +647,7 @@ bool MainWindow::saveNow()
             note_.saveErrorShown = true;
             QMessageBox::critical(
                 this, tr("Save failed"),
-                tr("Couldn't save “%1”:\n%2\n\nYour text is still here and will be saved when "
-                   "possible.")
-                    .arg(note_.path, w.error));
+                tr("Couldn't save “%1”:\n%2\n\nYour changes remain in the editor.").arg(note_.path, w.error));
         }
         updateStatus();
         return false;
@@ -673,7 +672,7 @@ bool MainWindow::openNote(const QString& path, int line, const QString& subpath,
     if (!saveNow()) {
         const auto r = QMessageBox::question(
             this, tr("Unsaved changes"),
-            tr("“%1” couldn't be saved. Stay on it so you can copy your text?").arg(note_.path),
+            tr("“%1” couldn't be saved. Stay on this note to keep your changes?").arg(note_.path),
             QMessageBox::Yes | QMessageBox::Discard, QMessageBox::Yes);
         if (r != QMessageBox::Discard) return false;
     }
@@ -707,18 +706,15 @@ bool MainWindow::openNote(const QString& path, int line, const QString& subpath,
     if (!t.editable()) {
         showBanner(t.error);
     } else if (!exact || !t.roundTrips) {
-        showBanner(tr("This note contains characters the editor can't keep exactly (for example old Mac line "
-                      "endings), so it's opened read-only to avoid changing them."));
+        showBanner(tr("Opened read-only: this note contains characters the editor can't preserve, such as "
+                      "old Mac line endings."));
     } else {
         const Frontmatter fm = parseFrontmatter(
             t.raw.startsWith("\xEF\xBB\xBF") ? QByteArrayView(t.raw).sliced(3) : QByteArrayView(t.raw));
         if (fm.present && !fm.valid)
-            showBanner(
-                tr("The properties (frontmatter) aren't valid YAML: %1 They're left exactly as they are.")
-                    .arg(fm.error));
+            showBanner(tr("Invalid frontmatter: %1 It will not be modified.").arg(fm.error));
         else if (t.format.mixedEol)
-            showBanner(
-                tr("This note mixes Windows and Unix line endings. Lines you don't edit keep theirs."));
+            showBanner(tr("This note has mixed line endings. Unedited lines keep theirs."));
     }
     editor_->document()->setModified(false);
     noteWatcher_->addPath(abs);
@@ -811,7 +807,7 @@ void MainWindow::checkOpenNoteOnDisk()
     if (!now.exists()) {
         if (!note_.orphaned) {
             note_.orphaned = true;
-            showBanner(tr("This note was deleted or moved outside the app. Your text is kept here."),
+            showBanner(tr("This note no longer exists on disk. Its contents remain in the editor."),
                        tr("Recreate file"), [this] {
                            note_.orphaned = false;
                            note_.diskRaw.clear();
@@ -837,9 +833,9 @@ void MainWindow::checkOpenNoteOnDisk()
     }
     const auto choice =
         QMessageBox::question(this, tr("Note changed on disk"),
-                              tr("“%1” was changed by another program, and you have unsaved edits.\n\nReload "
-                                 "it from disk (your edits are "
-                                 "discarded) or keep your version (it overwrites the file on the next save)?")
+                              tr("“%1” was modified by another program and has unsaved changes.\n\n"
+                                 "Reload it from disk (discarding your changes) or keep your version "
+                                 "(overwriting the file on the next save)?")
                                   .arg(note_.path),
                               QMessageBox::Discard | QMessageBox::Save, QMessageBox::Save);
     if (choice == QMessageBox::Discard) {
@@ -946,10 +942,29 @@ QString MainWindow::createNote(const QString& folder, const QString& baseName, c
 
 void MainWindow::newNote()
 {
-    const QString folder = vault_->settings().newNoteFolder(note_.path);
+    newNoteIn(vault_->settings().newNoteFolder(note_.path));
+}
+
+void MainWindow::newNoteIn(const QString& folder)
+{
+    if (!vault_->isOpen()) return;
     const QString path = uniqueName(vault_->root(), folder, u"Untitled"_s, u".md"_s);
     if (path.isEmpty()) return;
-    const QString created = createNote(folder, paths::linkName(path));
+    QString name = paths::linkName(path);
+    QByteArray content;
+    const VaultSettings& st = vault_->settings();
+    if (!st.tagProperties.isEmpty() && !st.categoryTags.isEmpty()) {
+        NewNoteDialog dlg(name, st.tagProperties, st.categoryTags, this);
+        if (dlg.exec() != QDialog::Accepted) return;
+        name = dlg.name();
+        content = dlg.content();
+        const QString target = paths::join(folder, QString(name + u".md"_s));
+        if (vault_->files().find(target) >= 0 || QFileInfo::exists(vault_->absolutePath(target))) {
+            QMessageBox::information(this, tr("New note"), tr("“%1” already exists.").arg(target));
+            return;
+        }
+    }
+    const QString created = createNote(folder, name, content);
     if (!created.isEmpty()) openNote(created);
 }
 
@@ -966,7 +981,7 @@ void MainWindow::newFolder(const QString& parentFolder)
     }
     const QString path = paths::join(parentFolder, name.trimmed());
     if (!QDir().mkpath(vault_->absolutePath(path)))
-        QMessageBox::warning(this, tr("New folder"), tr("Couldn't create it."));
+        QMessageBox::warning(this, tr("New folder"), tr("Couldn't create the folder."));
     vault_->refresh({paths::join(path, u"x"_s)});
 }
 
@@ -1086,7 +1101,7 @@ void MainWindow::runRename(const std::vector<Move>& moves, const std::optional<M
         if (!r.failed.isEmpty()) {
             QMessageBox::warning(
                 this, tr("Rename"),
-                tr("Renamed. These files were updated:\n%1\n\nThese files were NOT updated:\n%2")
+                tr("Renamed. Updated:\n%1\n\nNot updated:\n%2")
                     .arg(r.updated.isEmpty() ? tr("(none)") : r.updated.join(u'\n'), r.failed.join(u'\n')));
         } else {
             statusBar()->showMessage(
@@ -1399,11 +1414,11 @@ bool MainWindow::editTask(const TaskInfo& task, TaskAction action, bool confirmD
 {
     if (!vault_->isOpen()) return false;
     if (action == TaskAction::Delete && confirmDelete) {
-        const auto r = QMessageBox::question(
-            this, tr("Delete task"),
-            tr("Delete this task from “%1”? Nested items under it are deleted too.\n\n%2")
-                .arg(paths::linkName(task.path), task.text),
-            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+        const auto r =
+            QMessageBox::question(this, tr("Delete task"),
+                                  tr("Delete this task from “%1”? Nested items are deleted too.\n\n%2")
+                                      .arg(paths::linkName(task.path), task.text),
+                                  QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
         if (r != QMessageBox::Yes) return false;
     }
     const TaskLocator where{task.line, task.text};
@@ -1527,11 +1542,7 @@ void MainWindow::treeContextMenu(const QPoint& pos)
     const bool folder = !idx.isValid() || idx.data(FileTreeModel::IsFolderRole).toBool();
     const QString folderPath = folder ? path : paths::folderOf(path);
     QMenu menu(this);
-    menu.addAction(tr("New note"), this, [this, folderPath] {
-        const QString p = uniqueName(vault_->root(), folderPath, u"Untitled"_s, u".md"_s);
-        const QString created = createNote(folderPath, paths::linkName(p));
-        if (!created.isEmpty()) openNote(created);
-    });
+    menu.addAction(tr("New note"), this, [this, folderPath] { newNoteIn(folderPath); });
     menu.addAction(tr("New folder"), this, [this, folderPath] { newFolder(folderPath); });
     if (idx.isValid()) {
         menu.addSeparator();

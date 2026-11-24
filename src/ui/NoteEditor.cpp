@@ -217,7 +217,7 @@ void NoteEditor::scanLinkSuggestions()
     }
     setExtraSelections(sels);
     Q_EMIT linkSuggestionHint(
-        tr("Alt+Enter links “%1” to %2   (Esc dismisses)")
+        tr("Alt+Enter: link “%1” to %2 · Esc: dismiss")
             .arg(suggestions_.front().text, paths::linkName(suggestions_.front().path)));
 }
 

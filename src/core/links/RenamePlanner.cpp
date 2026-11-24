@@ -201,7 +201,7 @@ RenameResult executeRenamePlan(const QString& vaultRoot, const RenamePlan& plan,
         const std::optional<QByteArray> now = readFile(abs(fp.path));
         if (!now || *now != fp.originalRaw) {
             result.failed.append(
-                u"%1: it changed after the update was planned, so it wasn't touched."_s.arg(fp.path));
+                u"%1: modified after the update was planned; left unchanged."_s.arg(fp.path));
             continue;
         }
         toWrite.push_back(&fp);

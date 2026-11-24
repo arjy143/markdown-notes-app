@@ -243,8 +243,7 @@ void TasksPanel::applyFilter()
     }
     filling_ = false;
     list_->setUpdatesEnabled(true);
-    status_->setText(
-        tr("%1 of %2 tasks · tick to complete · Del deletes").arg(shown.size()).arg(tasks_.size()));
+    status_->setText(tr("%1 of %2 tasks").arg(shown.size()).arg(tasks_.size()));
 }
 
 } // namespace mn::ui

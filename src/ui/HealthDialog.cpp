@@ -100,29 +100,29 @@ void HealthDialog::display(const HealthReport& r)
         top->setExpanded(n > 0 && n <= 50);
     };
 
-    QTreeWidgetItem* broken = section(tr("Broken links"), tr("links whose target doesn't exist"));
+    QTreeWidgetItem* broken = section(tr("Broken links"), tr("link targets that don't exist"));
     for (const UnresolvedLink& l : r.brokenLinks)
         item(broken, l.linkpath, tr("in %1, line %2").arg(l.sourcePath).arg(l.line + 1), l.sourcePath, l.line,
              0);
     finish(broken, static_cast<int>(r.brokenLinks.size()));
 
-    QTreeWidgetItem* orphans = section(tr("Orphan notes"), tr("no other note links to them"));
+    QTreeWidgetItem* orphans = section(tr("Orphan notes"), tr("not linked from any note"));
     for (const QString& p : r.orphanNotes)
         item(orphans, paths::linkName(p), paths::folderOf(p), p, -1, 0);
     finish(orphans, static_cast<int>(r.orphanNotes.size()));
 
-    QTreeWidgetItem* empty = section(tr("Empty notes"), tr("nothing but properties or blank lines"));
+    QTreeWidgetItem* empty = section(tr("Empty notes"), tr("only frontmatter or whitespace"));
     for (const QString& p : r.emptyNotes)
         item(empty, paths::linkName(p), paths::folderOf(p), p, -1, 0);
     finish(empty, static_cast<int>(r.emptyNotes.size()));
 
-    QTreeWidgetItem* unused = section(tr("Unused attachments"), tr("no note links to or embeds them"));
+    QTreeWidgetItem* unused = section(tr("Unused attachments"), tr("not linked or embedded anywhere"));
     for (const QString& p : r.unusedAttachments)
         item(unused, paths::fileName(p), paths::folderOf(p), p, -1, 1);
     finish(unused, static_cast<int>(r.unusedAttachments.size()));
 
     QTreeWidgetItem* tags =
-        section(tr("Tags that look alike"), tr("same apart from case, - _ or a plural s"));
+        section(tr("Tags that look alike"), tr("differ only in case, separators or plural form"));
     for (const TagGroup& g : r.similarTags) {
         QStringList parts;
         for (qsizetype i = 0; i < g.tags.size(); ++i)
@@ -133,7 +133,7 @@ void HealthDialog::display(const HealthReport& r)
     }
     finish(tags, static_cast<int>(r.similarTags.size()));
 
-    QTreeWidgetItem* dups = section(tr("Near-duplicate notes"), tr("most of their text is the same"));
+    QTreeWidgetItem* dups = section(tr("Near-duplicate notes"), tr("mostly identical text"));
     for (const DuplicateNotes& d : r.duplicateNotes) {
         auto* top = item(dups, paths::linkName(d.a) + u"  ↔  "_s + paths::linkName(d.b),
                          tr("%1% shared text").arg(qRound(d.similarity * 100)), d.a, -1, 0);
@@ -153,7 +153,7 @@ void HealthDialog::display(const HealthReport& r)
         finish(cats, static_cast<int>(r.fewCategories.size()));
     }
 
-    status_->setText(tr("Checked in %1 ms. Double-click an entry to open it.").arg(r.elapsedMs));
+    status_->setText(tr("Checked in %1 ms.").arg(r.elapsedMs));
 }
 
 } // namespace mn::ui

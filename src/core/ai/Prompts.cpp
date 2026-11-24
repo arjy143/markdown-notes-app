@@ -108,7 +108,7 @@ FrontmatterSuggestion parseFrontmatterSuggestion(const QString& replyIn, const F
     FrontmatterSuggestion s;
     const QJsonObject o = firstJsonObject(stripThinking(replyIn));
     if (o.isEmpty()) {
-        s.error = u"The model's reply wasn't the JSON that was asked for."_s;
+        s.error = u"Could not parse the model's response."_s;
         return s;
     }
     // Category properties: only known categories (in the vault's spelling), each used once.

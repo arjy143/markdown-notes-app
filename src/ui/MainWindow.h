@@ -111,6 +111,9 @@ private:
     void followLink(const QString& target, const QString& sourcePath);
     QString createNote(const QString& folder, const QString& baseName, const QByteArray& content = {});
     void newNote();
+    // A new note in `folder`. With category properties in the vault settings, asks for
+    // the name and the categories first (they become the note's frontmatter).
+    void newNoteIn(const QString& folder);
     void newFolder(const QString& parentFolder);
     void deletePath(const QString& path, bool folder);
     void promptRename(const QString& path, bool folder);

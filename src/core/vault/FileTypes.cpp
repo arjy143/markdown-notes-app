@@ -60,8 +60,7 @@ QString checkNewFileName(QStringView name)
     }
     static const QString linkBreaking = u"#^[]|"_s;
     for (QChar c : trimmed) {
-        if (linkBreaking.contains(c))
-            return u"File names can't contain # ^ [ ] or |, because they break links."_s;
+        if (linkBreaking.contains(c)) return u"File names can't contain # ^ [ ] or |."_s;
     }
     return {};
 }

@@ -99,6 +99,11 @@ public:
     // Pinned tags are listed first, in the order they were pinned (saved per vault).
     void setPinned(const QString& tag, bool pinned);
     void movePinned(const QString& tag, int delta);
+    // Shows only tags containing `text` (and their parents); empty shows all.
+    void setFilter(const QString& text);
+
+protected:
+    bool eventFilter(QObject* o, QEvent* e) override;
 
 Q_SIGNALS:
     void openRequested(const QString& path, int line, const QString& findText);
@@ -109,7 +114,9 @@ private:
     void showFiles(const QString& tag);
     void fillNotes();
     void applySort();
+    void applyFilter();
     VaultService* vault_;
+    QLineEdit* filter_;
     QComboBox* sort_;
     QComboBox* grouping_;
     QTreeWidget* tree_;

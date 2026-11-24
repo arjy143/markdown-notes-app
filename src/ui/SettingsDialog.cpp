@@ -36,7 +36,7 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     newLocation_->addItems({tr("Vault root"), tr("Same folder as current note"), tr("In the folder below")});
     newLocation_->setCurrentIndex(static_cast<int>(s.newFileLocation));
     newFolder_ = new QLineEdit(s.newFileFolderPath, this);
-    alwaysUpdate_ = new QCheckBox(tr("Don't ask before updating links (the list is still shown)"), this);
+    alwaysUpdate_ = new QCheckBox(tr("Update links on rename without confirmation"), this);
     alwaysUpdate_->setChecked(s.alwaysUpdateLinks);
     templates_ = new QLineEdit(s.templatesFolder, this);
     dateFormat_ = new QLineEdit(s.dateFormat, this);
@@ -53,7 +53,7 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     form->addRow(tr("Date format:"), dateFormat_);
     form->addRow(tr("Time format:"), timeFormat_);
     form->addRow(QString(), showAll_);
-    strictBreaks_ = new QCheckBox(tr("Strict line breaks (reading view joins single line breaks)"), this);
+    strictBreaks_ = new QCheckBox(tr("Strict line breaks"), this);
     strictBreaks_->setChecked(s.strictLineBreaks);
     form->addRow(QString(), strictBreaks_);
     captureTo_ = new QComboBox(this);
@@ -61,8 +61,7 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     captureTo_->setCurrentIndex(s.captureToDailyNote ? 1 : 0);
     captureNote_ = new QLineEdit(s.captureNote, this);
     captureFormat_ = new QLineEdit(s.captureFormat, this);
-    captureFormat_->setToolTip(
-        tr("{{text}} is the captured text; {{date}}, {{time}}, {{date:FORMAT}} work too"));
+    captureFormat_->setToolTip(tr("Placeholders: {{text}}, {{date}}, {{time}}, {{date:FORMAT}}"));
     dailyFolder_ = new QLineEdit(s.dailyNotesFolder, this);
     dailyFormat_ = new QLineEdit(s.dailyNoteFormat, this);
     dailyTemplate_ = new QLineEdit(s.dailyNoteTemplate, this);
@@ -75,18 +74,17 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     form->addRow(tr("Daily note template:"), dailyTemplate_);
     tagProperties_ = new QLineEdit(s.tagProperties.join(u", "_s), this);
     tagProperties_->setPlaceholderText(tr("e.g. primary, secondary"));
-    tagProperties_->setToolTip(tr("Frontmatter properties whose values also count as tags"));
+    tagProperties_->setToolTip(tr("Properties whose values are treated as tags"));
     categories_ = new QLineEdit(s.categoryTags.join(u", "_s), this);
     categories_->setPlaceholderText(tr("e.g. tech, projects, research"));
-    categories_->setToolTip(
-        tr("Your top-level tags: listed first in the tag pane and checked by Vault health"));
+    categories_->setToolTip(tr("Top-level tags, listed first in the tag pane"));
     minCategories_ = new QSpinBox(this);
     minCategories_->setRange(0, 10);
     minCategories_->setValue(s.minCategoryTags);
     minCategories_->setSpecialValueText(tr("Don't check"));
     auto* detect = new QPushButton(tr("Detect from vault"), this);
     detect->setEnabled(vault != nullptr);
-    detect->setToolTip(tr("Suggest properties and categories from how your notes' frontmatter is used"));
+    detect->setToolTip(tr("Detect properties and categories from existing frontmatter"));
     connect(detect, &QPushButton::clicked, this, [this, vault, detect] {
         detect->setEnabled(false);
         detect->setText(tr("Detecting…"));
@@ -103,7 +101,7 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     });
     form->addRow(tr("Properties that count as tags:"), tagProperties_);
     form->addRow(tr("Category tags:"), categories_);
-    form->addRow(tr("Categories each note should have:"), minCategories_);
+    form->addRow(tr("Minimum categories per note:"), minCategories_);
     form->addRow(QString(), detect);
     lay->addLayout(form);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);

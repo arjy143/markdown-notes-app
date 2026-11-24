@@ -119,7 +119,7 @@ void AiClient::chat(const std::vector<ChatMessage>& messages, ChatCallback cb, d
                 ? QString()
                 : choices.first().toObject().value(u"message"_s).toObject().value(u"content"_s).toString();
         if (content.isEmpty()) {
-            cb({}, u"The server's reply had no message in it."_s);
+            cb({}, u"Empty response from the server."_s);
             return;
         }
         cb(stripThinking(content), {});
@@ -154,7 +154,7 @@ void AiClient::embed(const QStringList& inputs, EmbedCallback cb)
             if (!v.empty()) ++filled;
         }
         if (filled != expected) {
-            cb({}, u"The server returned %1 embeddings for %2 texts."_s.arg(filled).arg(expected));
+            cb({}, u"Expected %2 embeddings, received %1."_s.arg(filled).arg(expected));
             return;
         }
         cb(std::move(out), {});

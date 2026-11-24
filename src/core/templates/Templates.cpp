@@ -259,8 +259,7 @@ TemplateInsertion planTemplateInsertion(QStringView noteText, QStringView templa
     }
     const Frontmatter parsed = parseFrontmatter(note.block.toUtf8());
     if (!parsed.valid) {
-        r.warning =
-            u"The note's properties aren't valid YAML, so the template's properties weren't merged."_s;
+        r.warning = u"Template properties were not merged: the note's frontmatter is invalid."_s;
         return r;
     }
     QSet<QString> existing;

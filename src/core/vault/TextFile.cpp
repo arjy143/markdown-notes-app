@@ -65,7 +65,7 @@ LoadedText decodeText(const QByteArray& raw)
     QString text = decoder.decode(body);
     if (decoder.hasError()) {
         out.status = LoadStatus::InvalidUtf8;
-        out.error = u"This file isn't valid UTF-8, so it's opened read-only to avoid damaging it."_s;
+        out.error = u"Opened read-only: the file is not valid UTF-8."_s;
         out.text = std::move(text);
         return out;
     }

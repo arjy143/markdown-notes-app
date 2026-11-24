@@ -22,9 +22,8 @@ AiSettingsDialog::AiSettingsDialog(const ai::AiConfig& c, QWidget* parent) : QDi
     setWindowTitle(tr("AI assistant"));
     auto* lay = new QVBoxLayout(this);
     auto* intro =
-        new QLabel(tr("Connect to a language model server that speaks the OpenAI API: llama.cpp "
-                      "(llama-server), Ollama, LM Studio, vLLM… The text of notes you search, ask "
-                      "about or tag is sent to this server, so use one you trust (your own machine)."),
+        new QLabel(tr("Requires an OpenAI-compatible server, such as Ollama, llama.cpp or LM Studio. "
+                      "Note content is sent to this server."),
                    this);
     intro->setWordWrap(true);
     lay->addWidget(intro);
@@ -33,33 +32,31 @@ AiSettingsDialog::AiSettingsDialog(const ai::AiConfig& c, QWidget* parent) : QDi
     url_->setPlaceholderText(u"http://192.168.1.20:8080/v1"_s);
     key_ = new QLineEdit(c.apiKey, this);
     key_->setEchoMode(QLineEdit::Password);
-    key_->setPlaceholderText(tr("usually not needed"));
+    key_->setPlaceholderText(tr("Optional"));
     chat_ = new QLineEdit(c.chatModel, this);
-    chat_->setPlaceholderText(tr("e.g. qwen2.5:14b — for questions and tagging"));
+    chat_->setPlaceholderText(tr("e.g. qwen2.5:14b"));
     embed_ = new QLineEdit(c.embedModel, this);
-    embed_->setPlaceholderText(tr("e.g. nomic-embed-text — for semantic search"));
+    embed_->setPlaceholderText(tr("e.g. nomic-embed-text"));
     form->addRow(tr("Server URL:"), url_);
     form->addRow(tr("API key:"), key_);
     form->addRow(tr("Chat model:"), chat_);
     form->addRow(tr("Embedding model:"), embed_);
     embedUrl_ = new QLineEdit(c.embedUrl, this);
-    embedUrl_->setPlaceholderText(tr("same server (set this when embeddings run on another port)"));
+    embedUrl_->setPlaceholderText(tr("Optional; defaults to the server URL"));
     form->addRow(tr("Embedding server:"), embedUrl_);
     lay->addLayout(form);
 
-    auto* adv = new QGroupBox(tr("Embedding prefixes (only for models that want them)"), this);
+    auto* adv = new QGroupBox(tr("Embedding prefixes"), this);
     auto* af = new QFormLayout(adv);
     queryPrefix_ = new QLineEdit(c.queryPrefix, adv);
     queryPrefix_->setPlaceholderText(u"search_query: "_s);
     docPrefix_ = new QLineEdit(c.documentPrefix, adv);
     docPrefix_->setPlaceholderText(u"search_document: "_s);
-    af->addRow(tr("Before searches:"), queryPrefix_);
-    af->addRow(tr("Before passages:"), docPrefix_);
+    af->addRow(tr("Query prefix:"), queryPrefix_);
+    af->addRow(tr("Document prefix:"), docPrefix_);
     lay->addWidget(adv);
 
-    index_ = new QCheckBox(tr("Build the semantic index in the background (embeds every passage once; "
-                              "only changed passages again)"),
-                           this);
+    index_ = new QCheckBox(tr("Build semantic index in the background"), this);
     index_->setChecked(c.semanticIndex);
     lay->addWidget(index_);
 
@@ -100,14 +97,14 @@ void AiSettingsDialog::test()
     client_.cancelAll();
     client_.setConfig(c);
     if (c.baseUrl.isEmpty() && c.embedServer().isEmpty()) {
-        result_->setText(tr("Enter the server URL first."));
+        result_->setText(tr("Enter a server URL."));
         return;
     }
-    result_->setText(tr("Testing %1 …").arg(client_.endpoint(QString()).toString()));
+    result_->setText(tr("Testing…"));
     auto lines = std::make_shared<QStringList>();
     auto pending = std::make_shared<int>((c.chatModel.isEmpty() ? 0 : 1) + (c.embedModel.isEmpty() ? 0 : 1));
     if (*pending == 0) {
-        result_->setText(tr("Enter a chat model, an embedding model or both."));
+        result_->setText(tr("Enter a chat or embedding model."));
         return;
     }
     auto report = [this, lines, pending](const QString& line) {
@@ -116,15 +113,14 @@ void AiSettingsDialog::test()
     };
     if (!c.chatModel.isEmpty()) {
         client_.chat({{u"user"_s, u"Reply with the single word OK."_s}},
-                     [report](const QString& reply, const QString& error) {
-                         report(error.isEmpty() ? tr("Chat: works (\"%1\")").arg(reply.left(40))
-                                                : tr("Chat: %1").arg(error));
+                     [report](const QString&, const QString& error) {
+                         report(error.isEmpty() ? tr("Chat: OK") : tr("Chat: %1").arg(error));
                      });
     }
     if (!c.embedModel.isEmpty()) {
         client_.embed({u"test"_s}, [report](std::vector<std::vector<float>> v, const QString& error) {
             report(error.isEmpty()
-                       ? tr("Embeddings: work (%1 dimensions)").arg(v.empty() ? 0 : v.front().size())
+                       ? tr("Embeddings: OK (%1 dimensions)").arg(v.empty() ? 0 : v.front().size())
                        : tr("Embeddings: %1").arg(error));
         });
     }
@@ -136,9 +132,7 @@ AiFrontmatterDialog::AiFrontmatterDialog(const QString& noteText, const ai::Fron
 {
     setWindowTitle(tr("Suggested frontmatter"));
     auto* lay = new QVBoxLayout(this);
-    auto* intro = new QLabel(tr("Edit or clear anything before applying. Existing values are never changed; "
-                                "the change goes into the editor, where Ctrl+Z undoes it."),
-                             this);
+    auto* intro = new QLabel(tr("Review before applying. Existing values are kept."), this);
     intro->setWordWrap(true);
     lay->addWidget(intro);
     const Frontmatter fm = parseFrontmatter(noteText.toUtf8());
@@ -148,18 +142,18 @@ AiFrontmatterDialog::AiFrontmatterDialog(const QString& noteText, const ai::Fron
         if (const FrontmatterField* have = fm.field(key)) {
             edit->setText(have->value);
             edit->setEnabled(false);
-            edit->setToolTip(tr("Already set in the note (suggested: %1)").arg(value));
+            edit->setToolTip(tr("Already set (suggested: %1)").arg(value));
         }
         form->addRow(key + u':', edit);
         fields_.append({key, edit});
         connect(edit, &QLineEdit::textChanged, this, &AiFrontmatterDialog::updatePreview);
     }
     tags_ = new QLineEdit(s.tags.join(u", "_s), this);
-    tags_->setToolTip(tr("Tags to add, separated by commas. Tags the note already has are kept."));
+    tags_->setToolTip(tr("Comma-separated"));
     form->addRow(tr("Add tags:"), tags_);
     connect(tags_, &QLineEdit::textChanged, this, &AiFrontmatterDialog::updatePreview);
     lay->addLayout(form);
-    lay->addWidget(new QLabel(tr("The note's frontmatter will be:"), this));
+    lay->addWidget(new QLabel(tr("Preview:"), this));
     preview_ = new QPlainTextEdit(this);
     preview_->setReadOnly(true);
     preview_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -197,7 +191,7 @@ void AiFrontmatterDialog::updatePreview()
         return;
     }
     QString block = e.text;
-    if (!e.changed && e.replaceLines == 0) block = tr("(nothing to add)");
+    if (!e.changed && e.replaceLines == 0) block = tr("No changes");
     preview_->setPlainText(block);
     note_->setText(e.skipped.isEmpty() ? QString() : tr("Not added: %1").arg(e.skipped.join(u"; "_s)));
 }

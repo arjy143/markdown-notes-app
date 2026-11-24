@@ -14,30 +14,30 @@ cmake --preset release && cmake --build --preset release
 ctest --preset debug    # tests (after building the debug preset)
 ```
 
-To install it for your user on Linux (launcher entry, icon, and a Meta+Shift+N quick-capture shortcut on KDE), run `./install.sh`. Use `--appimage FILE` to install an AppImage instead, `--desktop-icon` to add a desktop launcher, and `--uninstall` to remove it.
+To install for the current user on Linux (launcher entry, icon and a Meta+Shift+N quick-capture shortcut on KDE), run `./install.sh`. Options: `--appimage FILE`, `--desktop-icon`, `--uninstall`.
 
 Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows/build-zip.ps1` (portable zip).
 
 ## Beyond Obsidian
 
-- **Vault health** (Tools): broken links, orphan and empty notes, unused attachments, look-alike tags, near-duplicate notes, and notes with too few category tags.
-- **Passage search:** switch Search from Notes to Passages to get just the parts of notes that match, not whole notes. Sorted newest or oldest first, a topic spread over months of daily notes reads as one timeline. `#tag` filters keep passages that contain the tag.
-- **Related notes** in the right panel, based on shared words, links and tags, and **related to this paragraph**: passages in other notes about the paragraph you're in.
-- **Tasks** tab: every `- [ ]` in the vault, with due dates (`2025-01-31` or `due:2025-01-31`). Tick to complete; Delete removes a task.
-- **Tags as structure:** clicking a tag shows its notes as a tree grouped by their other tags. Right-click a tag to pin it to the top of the list. Vault settings can count properties like `primary` / `secondary` as tags and define category tags. Search accepts `#tag` filters.
-- **Link suggestions:** mentions of note names are underlined as you type; Alt+Enter links one.
-- **Quick capture:** `markdown-notes --capture` appends a line to `Inbox.md` (or today's daily note). Bind it to a global shortcut in your desktop settings.
-- **Appearance** (View): theme, accent colour, fonts, readable line length.
+- **Vault health** (Tools): broken links, orphan and empty notes, unused attachments, similar tags, near-duplicate notes, and notes missing category tags.
+- **Passage search:** Search › Passages returns matching sections rather than whole notes, sortable by date. `#tag` filters apply per passage.
+- **Related notes** and **related passages** for the current paragraph, in the right panel.
+- **Tasks** tab: all `- [ ]` items in the vault, with due dates (`2025-01-31` or `due:2025-01-31`). Tasks can be completed or deleted from the list.
+- **Tags:** filter, sort and pin tags; selecting a tag shows its notes grouped by their other tags. Frontmatter properties such as `primary` / `secondary` can count as tags, and with category tags configured, new notes (Ctrl+N) offer them as dropdowns.
+- **Link suggestions:** mentions of note names are underlined while typing; Alt+Enter converts one to a link.
+- **Quick capture:** `markdown-notes --capture` appends a line to `Inbox.md` or today's daily note.
+- **Appearance** (View): theme, accent colour, fonts and line length.
 
-## AI assistant (optional, local)
+## AI assistant (optional)
 
-Connect your own model server in **Tools › AI assistant settings**: any server with the OpenAI API (Ollama, LM Studio, llama.cpp's `llama-server`, vLLM). Set a chat model, an embedding model, or both; "Test connection" checks them. Notes' text goes only to that server, and the assistant never changes a note by itself.
+Configure an OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM) in **Tools › AI assistant settings**. Note content is sent only to that server, and notes are only changed when you apply a suggestion.
 
-- **Suggest frontmatter and tags** (Ctrl+Shift+M): proposes category properties (from your vault settings), tags (preferring ones you already use) and a summary, in the style of similar notes. You review and edit them; Apply adds only what's missing, as one undoable edit.
-- **Ask** tab (Ctrl+Shift+A): questions answered from your notes, citing the passages used; click a citation to open it.
-- **Semantic search:** with an embedding model, passages are embedded once in the background (progress in the status bar), and Search gets a **Meaning** mode that finds passages by meaning as well as words. "Related to this paragraph" uses it too.
+- **Suggest frontmatter and tags** (Ctrl+Shift+M): proposes categories, tags and a summary for the open note. Suggestions are reviewed before applying; existing values are kept.
+- **Ask** (Ctrl+Shift+A): answers questions from your notes, with cited sources.
+- **Semantic search:** with an embedding model, Search › Meaning matches passages by meaning as well as keywords. Passages are indexed in the background.
 
-With llama.cpp, which serves one model per server, put the embedding server's address in "Embedding server". Build with `-DMN_AI=OFF` to leave the assistant (and Qt Network) out.
+For llama.cpp, which serves one model per process, set "Embedding server" separately. Build with `-DMN_AI=OFF` to exclude the assistant and Qt Network.
 
 ## Keys
 

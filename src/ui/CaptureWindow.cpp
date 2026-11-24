@@ -17,7 +17,7 @@ CaptureWindow::CaptureWindow(const QString& target, QWidget* parent) : QDialog(p
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(10, 10, 10, 8);
     edit_ = new QPlainTextEdit(this);
-    edit_->setPlaceholderText(tr("Write a thought…"));
+    edit_->setPlaceholderText(tr("Text to capture"));
     edit_->setTabChangesFocus(true);
     edit_->setFixedHeight(edit_->fontMetrics().lineSpacing() * 3 + 16);
     edit_->installEventFilter(this);

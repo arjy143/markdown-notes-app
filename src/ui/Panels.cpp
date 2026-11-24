@@ -11,6 +11,7 @@
 #include <QDateTime>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -125,8 +126,7 @@ SearchPanel::SearchPanel(VaultService* vault, QWidget* parent) : QWidget(parent)
     auto* options = new QHBoxLayout;
     mode_ = new QComboBox(this);
     mode_->addItems({tr("Notes"), tr("Passages")});
-    mode_->setToolTip(tr("Notes: whole notes that match.\nPassages: just the parts of notes that match, "
-                         "so a topic spread over many (daily) notes reads as one list."));
+    mode_->setToolTip(tr("Notes: matching notes\nPassages: matching sections of notes"));
     mode_->setCurrentIndex(std::clamp(QSettings().value(u"search/mode"_s, 0).toInt(), 0, 1));
     sort_ = new QComboBox(this);
     sort_->addItems({tr("Best match"), tr("Newest first"), tr("Oldest first")});
@@ -172,10 +172,7 @@ void SearchPanel::setSemanticSearch(PassageSearch search)
     semantic_ = std::move(search);
     if (mode_->count() == 2) {
         mode_->addItem(tr("Meaning"));
-        mode_->setItemData(2,
-                           tr("Passages that match by meaning as well as by words (semantic search with the "
-                              "AI assistant's embedding model)"),
-                           Qt::ToolTipRole);
+        mode_->setItemData(2, tr("Semantic search (requires an embedding model)"), Qt::ToolTipRole);
         if (QSettings().value(u"search/mode"_s, 0).toInt() == 2) mode_->setCurrentIndex(2);
     }
 }
@@ -204,7 +201,7 @@ void SearchPanel::run()
             passages_ = std::move(hits);
             showPassages();
             if (!error.isEmpty())
-                status_->setText(status_->text() + u" · "_s + tr("words only: %1").arg(error));
+                status_->setText(status_->text() + u" · "_s + tr("keyword matches only (%1)").arg(error));
         });
         return;
     }
@@ -334,7 +331,7 @@ void BacklinksPanel::refresh()
     linked_ = new QTreeWidgetItem(tree_, {tr("Linked mentions")});
     related_ = new QTreeWidgetItem(tree_, {tr("Related notes")});
     passages_ = new QTreeWidgetItem(tree_, {tr("Related to this paragraph")});
-    passages_->setToolTip(0, tr("Passages in other notes about the paragraph the cursor is in"));
+    passages_->setToolTip(0, tr("Similar passages in other notes"));
     unlinked_ = new QTreeWidgetItem(tree_, {tr("Unlinked mentions")});
     unlinked_->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
     QFont bold = linked_->font(0);
@@ -472,6 +469,10 @@ TagPanel::TagPanel(VaultService* vault, QWidget* parent) : QWidget(parent), vaul
 {
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(4, 4, 4, 4);
+    filter_ = new QLineEdit(this);
+    filter_->setPlaceholderText(tr("Find a tag…"));
+    filter_->setClearButtonEnabled(true);
+    lay->addWidget(filter_);
     sort_ = new QComboBox(this);
     sort_->addItems({tr("Sort by name"), tr("Most used first"), tr("Least used first")});
     sort_->setCurrentIndex(std::clamp(QSettings().value(u"tags/sort"_s, 0).toInt(), 0, 2));
@@ -507,6 +508,21 @@ TagPanel::TagPanel(VaultService* vault, QWidget* parent) : QWidget(parent), vaul
     });
     tree_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(tree_, &QTreeWidget::customContextMenuRequested, this, &TagPanel::showMenu);
+    connect(filter_, &QLineEdit::textChanged, this, &TagPanel::applyFilter);
+    // Enter opens the first match's notes; Down moves into the list.
+    connect(filter_, &QLineEdit::returnPressed, this, [this] {
+        for (QTreeWidgetItemIterator it(tree_, QTreeWidgetItemIterator::NotHidden); *it; ++it) {
+            if ((*it)
+                    ->data(0, kPathRole)
+                    .toString()
+                    .contains(filter_->text().trimmed().remove(u'#'), Qt::CaseInsensitive)) {
+                tree_->setCurrentItem(*it);
+                tree_->setFocus();
+                return;
+            }
+        }
+    });
+    filter_->installEventFilter(this);
     connect(sort_, &QComboBox::currentIndexChanged, this, [this](int i) {
         QSettings().setValue(u"tags/sort"_s, i);
         applySort();
@@ -598,6 +614,7 @@ void TagPanel::refresh()
         }
     }
     applySort();
+    applyFilter();
     if (!current_.isEmpty()) {
         // Keep the selected tag highlighted across refreshes.
         for (QTreeWidgetItemIterator it(tree_); *it; ++it) {
@@ -665,6 +682,50 @@ void TagPanel::savePinned(const QStringList& pinned)
         return;
     }
     refresh();
+}
+
+bool TagPanel::eventFilter(QObject* o, QEvent* e)
+{
+    if (o == filter_ && e->type() == QEvent::KeyPress) {
+        const int key = static_cast<QKeyEvent*>(e)->key();
+        if (key == Qt::Key_Down) {
+            QTreeWidgetItemIterator it(tree_, QTreeWidgetItemIterator::NotHidden);
+            if (tree_->currentItem() == nullptr || tree_->currentItem()->isHidden()) {
+                if (*it) tree_->setCurrentItem(*it);
+            }
+            tree_->setFocus();
+            return true;
+        }
+        if (key == Qt::Key_Escape && !filter_->text().isEmpty()) {
+            filter_->clear();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(o, e);
+}
+
+void TagPanel::setFilter(const QString& text)
+{
+    filter_->setText(text);
+}
+
+void TagPanel::applyFilter()
+{
+    const QString needle = filter_->text().trimmed().remove(u'#');
+    // Bottom-up: an item is shown if it matches or a child is shown.
+    std::function<bool(QTreeWidgetItem*)> visit = [&](QTreeWidgetItem* item) {
+        bool childShown = false;
+        for (int i = 0; i < item->childCount(); ++i)
+            childShown = visit(item->child(i)) || childShown;
+        const bool match =
+            needle.isEmpty() || item->data(0, kPathRole).toString().contains(needle, Qt::CaseInsensitive);
+        item->setHidden(!match && !childShown);
+        // While filtering, open parents so nested matches are visible.
+        if (!needle.isEmpty() && childShown) item->setExpanded(true);
+        return match || childShown;
+    };
+    for (int i = 0; i < tree_->topLevelItemCount(); ++i)
+        visit(tree_->topLevelItem(i));
 }
 
 void TagPanel::applySort()

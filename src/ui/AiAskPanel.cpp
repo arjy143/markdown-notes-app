@@ -44,8 +44,6 @@ AiAskPanel::AiAskPanel(ai::Assistant* assistant, QWidget* parent) : QWidget(pare
     auto* split = new QSplitter(Qt::Vertical, this);
     answer_ = new QTextBrowser(split);
     answer_->setOpenLinks(false);
-    answer_->setPlaceholderText(
-        tr("Answers come from your notes only, with the passages they used listed below."));
     sources_ = new QTreeWidget(split);
     sources_->setHeaderHidden(true);
     sources_->setRootIsDecorated(false);
@@ -90,7 +88,7 @@ void AiAskPanel::ask()
     answer_->clear();
     sources_->clear();
     askButton_->setText(tr("Stop"));
-    status_->setText(tr("Thinking… (local models can take a while)"));
+    status_->setText(tr("Generating answer…"));
     auto timer = std::make_shared<QElapsedTimer>();
     timer->start();
     assistant_->ask(q, [this, req, timer](ai::Assistant::Answer a) {
@@ -100,9 +98,8 @@ void AiAskPanel::ask()
             status_->setText(a.error);
             return;
         }
-        status_->setText(
-            tr("Answered in %1 s from %n passage(s).", nullptr, static_cast<int>(a.sources.size()))
-                .arg(static_cast<double>(timer->elapsed()) / 1000.0, 0, 'f', 1));
+        status_->setText(tr("%n source(s) · %1 s", nullptr, static_cast<int>(a.sources.size()))
+                             .arg(static_cast<double>(timer->elapsed()) / 1000.0, 0, 'f', 1));
         shown_ = std::move(a.sources);
         // Citations [n] become links to their passage.
         QString md = a.text;
@@ -129,7 +126,7 @@ void AiAskPanel::stop()
     ++request_;
     assistant_->cancel();
     askButton_->setText(tr("Ask"));
-    status_->setText(tr("Stopped."));
+    status_->setText(tr("Cancelled."));
 }
 
 } // namespace mn::ui

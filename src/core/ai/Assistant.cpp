@@ -127,7 +127,7 @@ void Assistant::search(const QString& query, std::function<void(std::vector<Pass
 void Assistant::ask(const QString& question, std::function<void(Answer)> cb)
 {
     if (!config().chatReady()) {
-        cb({{}, {}, tr("Set the server and a chat model in Tools › AI assistant settings first.")});
+        cb({{}, {}, tr("No chat model configured. Set one in Tools › AI assistant settings.")});
         return;
     }
     QPointer<Assistant> self(this);
@@ -145,7 +145,7 @@ void Assistant::suggestFrontmatter(const QString& path, const QString& noteText,
 {
     if (!config().chatReady()) {
         FrontmatterSuggestion s;
-        s.error = tr("Set the server and a chat model in Tools › AI assistant settings first.");
+        s.error = tr("No chat model configured. Set one in Tools › AI assistant settings.");
         cb(s);
         return;
     }

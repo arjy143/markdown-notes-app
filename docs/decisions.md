@@ -274,3 +274,13 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
   - In related passages, semantic hits must be within 0.15 of the best match, and at least 0.5, since similarity scales differ between models.
 - **Frontmatter prompt:** includes the vault's categories (tag properties and category tags), the 150 most used tags, and the frontmatter of up to 3 similar notes as style examples. Replies are checked: categories must be known and are used once each, tags are cleaned and given the vault's existing spelling.
 - **Tested** against a fake OpenAI-compatible server (`tests/FakeAiServer.h`) whose embeddings put synonyms on the same dimension. This shows semantic search finding the sleep passages for "insomnia", a word in no note, and checks that the vault's bytes never change.
+
+## 2026-11-24 — Tag filter; categories when creating a note
+
+- **Tag filter:** "Find a tag…" above the tag list shows tags containing the text, case-insensitive and ignoring a leading `#`. Parents of matching nested tags stay visible and open. Enter selects the first match, Down moves into the list, Esc clears the filter, and the filter survives index refreshes.
+- **New note with categories:** when the vault settings define both category properties (tag properties such as `primary` and `secondary`) and category tags, Ctrl+N and the file tree's "New note" show a dialog first.
+  - It asks for a name and offers one dropdown per property, listing the categories plus "(none)". Picking a category already used by an earlier property clears the later one.
+  - The chosen values become the new file's frontmatter (`primary: tech`, and so on). Unset properties are left out, and Cancel creates nothing.
+  - An existing name is refused rather than opened.
+  - Vaults without categories keep the old behaviour: an "Untitled" note is created straight away.
+  - Notes created from links and the quick switcher are unchanged, because they already have a name and are meant to be quick.

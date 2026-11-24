@@ -46,8 +46,7 @@ std::optional<ByteEdit> planTaskEdit(QByteArrayView body, const TaskLocator& wan
                 ++matches;
             }
         }
-        if (matches != 1)
-            return fail(u"The task changed since the list was built. The list has been refreshed."_s);
+        if (matches != 1) return fail(u"The task has changed. The list was refreshed."_s);
     }
     if (action == TaskAction::Delete) {
         const std::vector<qsizetype> starts = lineStarts(body);

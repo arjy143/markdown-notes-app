@@ -153,7 +153,7 @@ FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch
         return e;
     }
     if (!fm.valid) {
-        e.error = u"The note's frontmatter can't be read (%1), so it was left unchanged."_s.arg(fm.error);
+        e.error = u"Invalid frontmatter (%1). The note was not changed."_s.arg(fm.error);
         return e;
     }
 
@@ -205,7 +205,7 @@ FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch
         }
         const QString value = keyLine < out.size() ? valueOf(out[keyLine].text) : QString();
         if (keyLine >= out.size() || tagField->complex) {
-            e.skipped.append(u"tags (the existing value is too complex to extend)"_s);
+            e.skipped.append(u"tags (unsupported format)"_s);
         } else if (tagField->isList && value.isEmpty() && lastItem > keyLine) {
             // Block list: new items after the last one, indented the same way.
             const QString& item = out[lastItem].text;
@@ -232,8 +232,7 @@ FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch
             out[keyLine].text += (value.contains(u',') ? u", "_s : u" "_s) +
                                  addTags.join(value.contains(u',') ? u", "_s : u" "_s);
         } else {
-            e.skipped.append(
-                u"tags (the existing value is written in a form that can't be extended safely)"_s);
+            e.skipped.append(u"tags (unsupported format)"_s);
         }
     }
 
@@ -264,7 +263,7 @@ FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch
         const Frontmatter check = parseFrontmatter(checkText);
         if (!check.present || !check.valid) {
             e.ok = e.changed = false;
-            e.error = u"The change would make the frontmatter unreadable, so it was not made."_s;
+            e.error = u"The change would produce invalid frontmatter and was not applied."_s;
         }
     }
     return e;

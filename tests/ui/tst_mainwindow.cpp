@@ -7,6 +7,7 @@
 #include "ui/MainWindow.h"
 #include "ui/MarkdownHighlighter.h"
 #include "ui/MathRenderer.h"
+#include "ui/NewNoteDialog.h"
 #include "ui/NoteEditor.h"
 #include "ui/Panels.h"
 #include "ui/QuickSwitcher.h"
@@ -14,10 +15,12 @@
 #include "ui/Theme.h"
 
 #include <QAbstractTextDocumentLayout>
+#include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
 #include <QFontDatabase>
+#include <QLineEdit>
 #include <QMimeData>
 #include <QSettings>
 #include <QSignalSpy>
@@ -631,6 +634,82 @@ private Q_SLOTS:
         // Looking never changes the note.
         QCOMPARE(test::readBytes(v.path(u"Daily/2024-03-14.md"_s)),
                  test::readBytes(test::fixture(u"passages-vault/Daily/2024-03-14.md"_s)));
+    }
+
+    void tagFilter()
+    {
+        QTemporaryDir dir;
+        QVERIFY(test::writeBytes(dir.path() + u"/a.md"_s, "#alpha #gamma #tech/ai #tech/web\n"));
+        QVERIFY(test::writeBytes(dir.path() + u"/b.md"_s, "#beta\n"));
+        VaultService svc;
+        QSignalSpy spy(&svc, &VaultService::indexingFinished);
+        QString err;
+        QTemporaryDir cache;
+        QVERIFY(svc.open(dir.path(), &err, cache.path() + u"/index.sqlite"_s));
+        QVERIFY(spy.wait(10000));
+        TagPanel panel(&svc);
+        panel.refresh();
+        auto* tree = panel.findChild<QTreeWidget*>();
+        auto shown = [&] {
+            QStringList out;
+            for (QTreeWidgetItemIterator it(tree, QTreeWidgetItemIterator::NotHidden); *it; ++it)
+                out.append((*it)->data(0, Qt::UserRole + 1).toString());
+            return out;
+        };
+        panel.setFilter(u"ai"_s);
+        QCOMPARE(shown(), (QStringList{u"tech"_s, u"tech/ai"_s})); // the parent stays, opened
+        QVERIFY(tree->topLevelItem(3)->isExpanded());
+        panel.setFilter(u"#ALP"_s);
+        QCOMPARE(shown(), (QStringList{u"alpha"_s}));
+        panel.setFilter(u"zzz"_s);
+        QVERIFY(shown().isEmpty());
+        panel.setFilter(QString());
+        QCOMPARE(shown().size(), 6);
+        // The filter survives a refresh (the index changing underneath).
+        panel.setFilter(u"bet"_s);
+        panel.refresh();
+        QCOMPARE(shown(), (QStringList{u"beta"_s}));
+        panel.setFilter(QString());
+    }
+
+    void newNoteAsksForCategories()
+    {
+        test::VaultCopy v(u"ui-vault"_s);
+        VaultSettings st = loadVaultSettings(v.root()).settings;
+        st.tagProperties = {u"primary"_s, u"secondary"_s};
+        st.categoryTags = {u"tech"_s, u"personal"_s, u"projects"_s};
+        QString err;
+        QVERIFY(saveVaultSettings(v.root(), st, &err));
+        MainWindow w;
+        QVERIFY(w.openVault(v.root()));
+        QAction* action = nullptr;
+        for (QAction* a : w.findChildren<QAction*>())
+            if (a->text() == u"&New note"_s) action = a;
+        QVERIFY(action);
+        bool checked = false;
+        QTimer::singleShot(0, &w, [&] {
+            auto* dlg = qobject_cast<NewNoteDialog*>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            dlg->findChild<QLineEdit*>()->setText(u"Idea"_s);
+            QCOMPARE(dlg->combo(0)->count(), 4); // (none) + the three categories
+            dlg->combo(1)->setCurrentIndex(1);   // tech
+            dlg->combo(0)->setCurrentIndex(1);   // tech too: the later one is cleared
+            QCOMPARE(dlg->combo(1)->currentIndex(), 0);
+            dlg->combo(1)->setCurrentIndex(2); // personal
+            checked = true;
+            dlg->accept();
+        });
+        action->trigger();
+        QVERIFY(checked);
+        QCOMPARE(w.currentPath(), u"Idea.md"_s);
+        QCOMPARE(test::readBytes(v.path(u"Idea.md"_s)),
+                 QByteArray("---\nprimary: tech\nsecondary: personal\n---\n"));
+
+        // Cancel creates nothing.
+        const int before = static_cast<int>(test::snapshotTree(v.root()).size());
+        QTimer::singleShot(0, &w, [] { QApplication::activeModalWidget()->close(); });
+        action->trigger();
+        QCOMPARE(static_cast<int>(test::snapshotTree(v.root()).size()), before);
     }
 
     void headingsUseTheNormalTextColour()
