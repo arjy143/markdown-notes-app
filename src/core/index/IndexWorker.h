@@ -35,6 +35,13 @@ public:
     std::vector<Backlink> backlinks(const QString& path);
     std::vector<Mention> unlinkedMentions(const QString& path, const QStringList& aliases);
     std::vector<SearchHit> search(const QString& query, int limit);
+    std::vector<Passage> searchPassages(const QString& query, int limit)
+    {
+        return store_.searchPassages(query, limit);
+    }
+    // Passages in other notes about the same thing as the passage of `noteText` at `line`
+    // (TF-IDF cosine over passages that share its most distinctive words).
+    std::vector<Passage> relatedPassages(const QString& noteText, int line, const QString& path, int limit);
     std::vector<HeadingInfo> headings(const QString& path) { return store_.headings(path); }
     std::vector<BlockInfo> blocks(const QString& path) { return store_.blocks(path); }
     QStringList filesWithTag(const QString& tag) { return store_.filesWithTag(tag); }
@@ -80,6 +87,8 @@ private:
     void forceReparse();
     // Statistics for related notes, reloaded when the index changes.
     void ensureStats();
+    // TF-IDF weights of a text's useful words (call ensureStats() first).
+    QHash<QString, double> termWeights(const QString& text) const;
     QHash<QString, int> docFreq_;
     QHash<QString, int> tagNotes_;
     int noteCount_ = 0;

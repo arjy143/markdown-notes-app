@@ -136,6 +136,21 @@ void VaultService::search(const QString& q, Callback<std::vector<SearchHit>> cb)
     query<std::vector<SearchHit>>([q](IndexWorker* w) { return w->search(q, 200); }, std::move(cb));
 }
 
+void VaultService::searchPassages(const QString& q, Callback<std::vector<Passage>> cb)
+{
+    query<std::vector<Passage>>([q](IndexWorker* w) { return w->searchPassages(q, 200); }, std::move(cb));
+}
+
+void VaultService::relatedPassages(const QString& noteText, int line, const QString& path,
+                                   Callback<std::vector<Passage>> cb, int limit)
+{
+    query<std::vector<Passage>>(
+        [noteText, line, path, limit](IndexWorker* w) {
+            return w->relatedPassages(noteText, line, path, limit);
+        },
+        std::move(cb));
+}
+
 void VaultService::headings(const QString& path, Callback<std::vector<HeadingInfo>> cb)
 {
     query<std::vector<HeadingInfo>>([path](IndexWorker* w) { return w->headings(path); }, std::move(cb));

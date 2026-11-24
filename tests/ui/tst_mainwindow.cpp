@@ -565,6 +565,74 @@ private Q_SLOTS:
         QCOMPARE(loadVaultSettings(dir.path()).settings.pinnedTags, (QStringList{u"Beta"_s, u"tech/ai"_s}));
     }
 
+    void searchByPassage()
+    {
+        test::VaultCopy v(u"passages-vault"_s);
+        VaultService svc;
+        QSignalSpy spy(&svc, &VaultService::indexingFinished);
+        QString err;
+        QVERIFY(svc.open(v.root(), &err, v.cacheDir() + u"/index.sqlite"_s));
+        QVERIFY(spy.wait(10000));
+        SearchPanel panel(&svc);
+        const auto combos = panel.findChildren<QComboBox*>();
+        QCOMPARE(combos.size(), 2);
+        QComboBox* mode = combos[0];
+        QComboBox* sort = combos[1];
+        mode->setCurrentIndex(1);
+        sort->setCurrentIndex(2); // oldest first
+        auto* results = panel.findChild<QTreeWidget*>();
+        QSignalSpy open(&panel, &SearchPanel::openRequested);
+        panel.focusSearch(u"caffeine"_s);
+        QTRY_COMPARE(results->topLevelItemCount(), 4);
+        // A timeline: the daily notes by the date in their names.
+        QCOMPARE(results->topLevelItem(0)->toolTip(0), u"Daily/2024-03-14.md"_s);
+        QCOMPARE(results->topLevelItem(1)->toolTip(0), u"Daily/2024-06-02.md"_s);
+        QCOMPARE(results->topLevelItem(2)->toolTip(0), u"Daily/2025-01-20.md"_s);
+        // Clicking opens the note at the passage.
+        Q_EMIT results->itemClicked(results->topLevelItem(2), 0);
+        QCOMPARE(open.size(), 1);
+        QCOMPARE(open[0][1].toInt(), 5); // after the frontmatter and the budget paragraph
+        sort->setCurrentIndex(1);        // newest first
+        QCOMPARE(results->topLevelItem(results->topLevelItemCount() - 1)->toolTip(0),
+                 u"Daily/2024-03-14.md"_s);
+        mode->setCurrentIndex(0);
+        sort->setCurrentIndex(0);
+    }
+
+    void relatedPassagesFollowTheCursor()
+    {
+        test::VaultCopy v(u"passages-vault"_s);
+        MainWindow w;
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        QVERIFY(w.openVault(v.root()));
+        QVERIFY(w.openNote(u"Daily/2024-03-14.md"_s));
+        auto* panel = w.findChild<BacklinksPanel*>();
+        auto* tree = panel->findChild<QTreeWidget*>();
+        auto section = [&]() -> QTreeWidgetItem* {
+            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                if (tree->topLevelItem(i)->text(0).startsWith(u"Related to this paragraph"_s))
+                    return tree->topLevelItem(i);
+            }
+            return nullptr;
+        };
+        QTextCursor c(w.editor()->document()->findBlockByNumber(5)); // the Rust paragraph
+        w.editor()->setTextCursor(c);
+        QTRY_VERIFY_WITH_TIMEOUT(section() && section()->childCount() > 0 &&
+                                     section()->child(0)->data(0, Qt::UserRole + 1).toString() ==
+                                         u"Rust notes.md"_s,
+                                 5000);
+        c = QTextCursor(w.editor()->document()->findBlockByNumber(3)); // the sleep paragraph
+        w.editor()->setTextCursor(c);
+        QTRY_VERIFY_WITH_TIMEOUT(section()->childCount() > 0 &&
+                                     section()->child(0)->data(0, Qt::UserRole + 1).toString() !=
+                                         u"Rust notes.md"_s,
+                                 5000);
+        // Looking never changes the note.
+        QCOMPARE(test::readBytes(v.path(u"Daily/2024-03-14.md"_s)),
+                 test::readBytes(test::fixture(u"passages-vault/Daily/2024-03-14.md"_s)));
+    }
+
     void headingsUseTheNormalTextColour()
     {
         // Regression: the theme was computed while the editor was disabled (no note

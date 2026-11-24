@@ -56,6 +56,19 @@ struct SearchHit {
     double rank = 0;
 };
 
+// A passage of a note (a chunk, see Chunker.h): a search hit or a related passage.
+struct Passage {
+    QString path;
+    int startLine = 0; // 0-based, inclusive
+    int endLine = 0;
+    QString context;   // heading path
+    QString snippet;   // with \x01 / \x02 around matches
+    QString text;      // the whole passage
+    double score = 0;  // search: BM25 (lower is better); related: similarity (higher is better)
+    qint64 dateMs = 0; // the date in the file name (daily notes), else the file's modification time
+    QString reason;    // related passages: the words they share
+};
+
 struct HeadingInfo {
     int level = 1;
     QString text;

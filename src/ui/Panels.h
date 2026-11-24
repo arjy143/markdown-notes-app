@@ -39,11 +39,15 @@ Q_SIGNALS:
 
 private:
     void run();
+    void showPassages();
     VaultService* vault_;
     QLineEdit* edit_;
+    QComboBox* mode_; // whole notes, or passages (the part of a note about the query)
+    QComboBox* sort_; // passages: best match, newest or oldest first
     QTreeWidget* results_;
     QLabel* status_;
     QTimer* debounce_;
+    std::vector<Passage> passages_;
     int request_ = 0;
 };
 
@@ -54,17 +58,23 @@ public:
     explicit BacklinksPanel(VaultService* vault, QWidget* parent = nullptr);
     void setNote(const QString& path);
     void refresh();
+    // Looks for passages in other notes about the passage at `line` of the open note.
+    void setCursorPassage(const QString& noteText, int line);
 
 Q_SIGNALS:
     void openRequested(const QString& path, int line, const QString& findText);
 
 private:
     void loadMentions();
+    void showRelatedPassages();
     VaultService* vault_;
     QString path_;
     QTreeWidget* tree_;
     QTreeWidgetItem* linked_ = nullptr;
     QTreeWidgetItem* related_ = nullptr;
+    QTreeWidgetItem* passages_ = nullptr;
+    std::vector<Passage> relatedPassages_; // for path_
+    int passageRequest_ = 0;
     QTreeWidgetItem* unlinked_ = nullptr;
     int request_ = 0;
     bool mentionsLoaded_ = false;

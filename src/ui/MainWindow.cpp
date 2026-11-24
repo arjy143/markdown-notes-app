@@ -227,6 +227,15 @@ void MainWindow::buildUi()
     statusBar()->addWidget(statusPath_, 1);
     statusBar()->addPermanentWidget(statusInfo_);
 
+    passageTimer_ = new QTimer(this);
+    passageTimer_->setSingleShot(true);
+    passageTimer_->setInterval(800);
+    connect(passageTimer_, &QTimer::timeout, this, [this] {
+        if (note_.path.isEmpty() || !backlinks_->isVisible() || backlinks_->width() == 0) return;
+        backlinks_->setCursorPassage(editor_->bufferText(), editor_->textCursor().blockNumber());
+    });
+    connect(editor_, &QPlainTextEdit::cursorPositionChanged, passageTimer_, qOverload<>(&QTimer::start));
+
     autosave_ = new QTimer(this);
     autosave_->setSingleShot(true);
     autosave_->setInterval(kAutosaveMs);

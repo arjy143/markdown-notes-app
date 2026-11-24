@@ -14,6 +14,7 @@ add_library(mn_core STATIC
     core/index/IndexTypes.h
     core/index/IndexStore.cpp core/index/IndexStore.h
     core/index/IndexWorker.cpp core/index/IndexWorker.h
+    core/index/Chunker.cpp core/index/Chunker.h
     core/index/Similarity.cpp core/index/Similarity.h
     core/index/TagTree.cpp core/index/TagTree.h
     core/index/VaultService.cpp core/index/VaultService.h

@@ -234,3 +234,19 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
 
 - **Pinned tags** (right-click a tag in the Tags tab: Pin to top, Unpin, Move up or down). They are listed first, in pin order, whatever the sort setting. A pinned nested tag (`tech/ai`) gets its own top-level entry under its full name and also stays in place under its parent. The pins are saved in `.markdown-notes/settings.json` as a new optional `pinnedTags` list. Older settings files without it still load, so the format version stays 1. A pin is kept even while no note has that tag, so it comes back when the tag does.
 - The app remembers which left tab (Files, Search, Tags or Tasks) was open, so a vault browsed by tags opens on the Tags tab.
+
+## 2026-11-24 — Passages: search and related passages by topic, not by note
+
+- **Problem:** daily notes mix several topics, so ranking whole notes buries a topic that is one paragraph of a long page.
+- **Chunker** (`core/index/Chunker`, heuristic, no models): splits each note into passages of roughly one topic.
+  - Units are paragraphs, top-level list items and code/math/comment blocks (never split). A paragraph over 250 words written as separate lines is split into its lines.
+  - Within a heading section, neighbouring units merge while the chunk is under 15 words, or while they share vocabulary (cosine ≥ 0.1 of their word counts) and stay under 250 words. A block joins the text before it.
+  - A section under a heading of up to 120 words stays whole. Headings mark topics, and short bullet lists share few words. Text before the first heading, like a daily note's, is split by topic.
+  - A heading directly above a subheading isn't a passage of its own; the subsections carry it as context ("Jenkins › Job types › Freestyle").
+- **Index schema v4:** a `chunks` table holds line ranges and the heading path, and `chunk_fts` is a contentless FTS5 table (`contentless_delete=1`) over the passage text plus note name and headings. Passage text is sliced from `fts.body` when shown, so note text isn't stored twice.
+- **Passage search** (Search › Passages): BM25 over passages. Sorted by best match, newest or oldest. The date comes from a `YYYY-MM-DD` in the file name, else the modification time. A `#tag` filter keeps passages that contain the tag inline, or whose note has it in frontmatter. Notes mode is unchanged and stays the default.
+- **Related to this paragraph** (right panel), 0.8 s after the cursor rests:
+  - The open buffer is chunked on the worker thread, and the passage at the cursor is matched against other notes' passages (FTS5 candidates on its 12 most distinctive words, then TF-IDF cosine).
+  - Plurals are folded ("jobs" = "job"), and at least two distinctive shared words are required: single shared words gave false matches such as Jenkins "jobs" for job applications.
+  - At most two passages per note, five in all.
+- **Cost:** about 6 passages per note on the 5k benchmark vault and 10 on the user's. The chunker was rewritten to hash words into sorted integer vectors (no allocation per word): 1.3 s down to 0.43 s single-threaded for 5k notes, run on the parallel parse threads. The extra FTS inserts add about 0.5 s (about a third) to a first-time index of the 5k vault. Passage search is about 2–3× the cost of note search, still inside the search budget. Nothing new is held in memory at idle. An FTS5 `hashsize` increase was tried and made no measurable difference.

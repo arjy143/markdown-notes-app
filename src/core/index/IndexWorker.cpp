@@ -42,6 +42,7 @@ struct ParsedNote {
     QByteArray hash;
     NoteMetadata meta;
     QString body;
+    std::vector<Chunk> chunks;
     qint64 size = 0;
     qint64 mtimeMs = 0;
     bool ok = false;
@@ -76,6 +77,7 @@ ParsedNote parseFile(const QString& abs, const QByteArray& knownHash, const QStr
     p.meta = parseNote(body);
     addPropertyTags(p.meta, tagProperties);
     p.body = QString::fromUtf8(body);
+    p.chunks = chunkNote(p.body, p.meta.frontmatter.present ? p.meta.frontmatter.closingLine + 1 : 0);
     return p;
 }
 
@@ -376,7 +378,7 @@ void IndexWorker::indexChanges(const std::vector<Change>& changes, QStringList& 
             sf.mtimeMs = e.mtimeMs;
             continue;
         }
-        store_.putNote(e.path, e.size, e.mtimeMs, p.hash, p.meta, p.body, !notes[i]->isNew);
+        store_.putNote(e.path, e.size, e.mtimeMs, p.hash, p.meta, p.body, p.chunks, !notes[i]->isNew);
         stored_.insert(e.path, {0, e.path, FileKind::Note, e.size, e.mtimeMs, p.hash});
     }
     if (profile) qInfo("index: database writes %lld ms", static_cast<long long>(phase.restart()));
@@ -511,6 +513,103 @@ void IndexWorker::ensureStats()
         tagNotes_.insert(t.tag.toCaseFolded(), t.notes);
 }
 
+QHash<QString, double> IndexWorker::termWeights(const QString& text) const
+{
+    const int n = noteCount_;
+    QHash<QString, double> w;
+    const QHash<QString, int> tf = sim::termFrequencies(sim::contentText(text));
+    for (auto it = tf.cbegin(); it != tf.cend(); ++it) {
+        const int df = docFreq_.value(it.key());
+        // Terms in more than a third of the notes say little about a topic.
+        if (df <= 0 || df > n / 3 + 1) continue;
+        w.insert(it.key(), (1.0 + std::log(it.value())) * std::log((1.0 + n) / df));
+    }
+    return w;
+}
+
+namespace {
+// "jobs" and "job" count as one word when comparing passages (FTS terms aren't stemmed).
+QHash<QString, double> foldPlurals(const QHash<QString, double>& w)
+{
+    QHash<QString, double> out;
+    out.reserve(w.size());
+    for (auto it = w.cbegin(); it != w.cend(); ++it) {
+        const QString& t = it.key();
+        const bool plural = t.size() > 3 && t.endsWith(u's') && !t.endsWith(u"ss"_s);
+        out[plural ? t.chopped(1) : t] += it.value();
+    }
+    return out;
+}
+
+double weightNorm(const QHash<QString, double>& w)
+{
+    double s = 0;
+    for (double v : w)
+        s += v * v;
+    return std::sqrt(s);
+}
+} // namespace
+
+std::vector<Passage> IndexWorker::relatedPassages(const QString& noteText, int line, const QString& path,
+                                                  int limit)
+{
+    std::vector<Passage> out;
+    const Frontmatter fm = parseFrontmatter(noteText.toUtf8());
+    const std::vector<Chunk> chunks = chunkNote(noteText, fm.present ? fm.closingLine + 1 : 0);
+    const Chunk* here = chunkAtLine(chunks, line);
+    if (here == nullptr) return out;
+    ensureStats();
+    const QHash<QString, double> weights = termWeights(here->context + u'\n' + here->text);
+    const QHash<QString, double> mine = foldPlurals(weights);
+    const double myNorm = weightNorm(mine);
+    if (mine.size() < 3 || myNorm <= 0) return out;
+
+    // Candidates: passages sharing this passage's most distinctive words.
+    std::vector<std::pair<double, QString>> top;
+    for (auto it = weights.cbegin(); it != weights.cend(); ++it) {
+        if (docFreq_.value(it.key()) >= 2) top.emplace_back(it.value(), it.key());
+    }
+    std::sort(top.begin(), top.end(), std::greater<>());
+    QStringList terms;
+    for (std::size_t i = 0; i < top.size() && i < 12; ++i)
+        terms.append(top[i].second);
+    std::vector<Passage> candidates = store_.passagesMatchingAny(terms, path, 60);
+
+    for (Passage& p : candidates) {
+        const QHash<QString, double> theirs = foldPlurals(termWeights(p.context + u'\n' + p.text));
+        const double theirNorm = weightNorm(theirs);
+        if (theirNorm <= 0) continue;
+        double dot = 0;
+        std::vector<std::pair<double, QString>> shared;
+        for (auto it = mine.cbegin(); it != mine.cend(); ++it) {
+            const auto t = theirs.constFind(it.key());
+            if (t == theirs.constEnd()) continue;
+            dot += it.value() * *t;
+            shared.emplace_back(it.value() * *t, it.key());
+        }
+        p.score = dot / (myNorm * theirNorm);
+        // One shared word is a coincidence more often than a topic.
+        if (p.score < 0.08 || shared.size() < 2) continue;
+        std::sort(shared.begin(), shared.end(), std::greater<>());
+        QStringList words;
+        for (std::size_t i = 0; i < shared.size() && i < 3; ++i)
+            words.append(shared[i].second);
+        p.reason = words.join(u", "_s);
+        out.push_back(std::move(p));
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const Passage& a, const Passage& b) { return a.score > b.score; });
+    // At most two passages per note, so one long note doesn't fill the list.
+    QHash<QString, int> perNote;
+    std::vector<Passage> picked;
+    for (Passage& p : out) {
+        if (static_cast<int>(picked.size()) >= limit) break;
+        if (++perNote[p.path] > 2) continue;
+        picked.push_back(std::move(p));
+    }
+    return picked;
+}
+
 std::vector<RelatedNote> IndexWorker::relatedNotes(const QString& path, int limit)
 {
     std::vector<RelatedNote> out;
@@ -518,26 +617,8 @@ std::vector<RelatedNote> IndexWorker::relatedNotes(const QString& path, int limi
     if (body.isEmpty()) return out;
     ensureStats();
     const int n = noteCount_;
-    auto idf = [&](const QString& term) {
-        const int df = docFreq_.value(term);
-        // Terms in more than a third of the notes say little about a topic.
-        return (df <= 0 || df > n / 3 + 1) ? 0.0 : std::log((1.0 + n) / df);
-    };
-    auto weights = [&](const QString& text) {
-        QHash<QString, double> w;
-        const QHash<QString, int> tf = sim::termFrequencies(sim::contentText(text));
-        for (auto it = tf.cbegin(); it != tf.cend(); ++it) {
-            const double i = idf(it.key());
-            if (i > 0) w.insert(it.key(), (1.0 + std::log(it.value())) * i);
-        }
-        return w;
-    };
-    auto norm = [](const QHash<QString, double>& w) {
-        double s = 0;
-        for (double v : w)
-            s += v * v;
-        return std::sqrt(s);
-    };
+    auto weights = [this](const QString& text) { return termWeights(text); };
+    auto norm = weightNorm;
 
     const QHash<QString, double> mine = weights(body);
     const double myNorm = norm(mine);

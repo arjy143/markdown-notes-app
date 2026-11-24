@@ -5,12 +5,17 @@
 #include "core/vault/Paths.h"
 
 #include <QCryptographicHash>
+#include <QDate>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <iterator>
+#include <type_traits>
 
 using namespace Qt::StringLiterals;
 
@@ -47,6 +52,12 @@ CREATE TABLE tasks(file_id INTEGER NOT NULL, line INTEGER NOT NULL, done INTEGER
 CREATE INDEX tasks_file ON tasks(file_id);
 CREATE VIRTUAL TABLE fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE fts_vocab USING fts5vocab(fts, 'row');
+CREATE TABLE chunks(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, start_line INTEGER NOT NULL,
+                    end_line INTEGER NOT NULL, context TEXT NOT NULL);
+CREATE INDEX chunks_file ON chunks(file_id);
+-- Passages. Contentless: the text is already in fts.body, sliced by line range when shown.
+CREATE VIRTUAL TABLE chunk_fts USING fts5(context, body, content = '', contentless_delete = 1,
+                                          tokenize = 'unicode61 remove_diacritics 2');
 )SQL";
 
 QString quoteFtsTerm(const QString& t)
@@ -95,8 +106,10 @@ QStringList snippetTerms(const QString& userQuery)
     return terms;
 }
 
-// Builds a snippet around the first match, marking matches with \x01 ... \x02.
-QString makeSnippet(const QString& body, const QStringList& terms)
+// Builds a snippet around the first match, marking matches with \x01 ... \x02:
+// up to `before` characters before it, `length` in all.
+QString makeSnippet(const QString& body, const QStringList& terms, qsizetype before = 60,
+                    qsizetype length = 200)
 {
     const QString folded = foldForMatch(body);
     qsizetype first = -1;
@@ -113,10 +126,10 @@ QString makeSnippet(const QString& body, const QStringList& terms)
         }
     }
     if (first < 0) first = 0;
-    qsizetype start = std::max<qsizetype>(0, first - 60);
+    qsizetype start = std::max<qsizetype>(0, first - before);
     while (start > 0 && start < body.size() && !body[start - 1].isSpace())
         --start;
-    const qsizetype end = std::min<qsizetype>(body.size(), start + 200);
+    const qsizetype end = std::min<qsizetype>(body.size(), start + length);
     QString out;
     if (start > 0) out += u'…';
     qsizetype i = start;
@@ -144,6 +157,52 @@ QString makeSnippet(const QString& body, const QStringList& terms)
     if (end < body.size()) out += u'…';
     return out.simplified();
 }
+
+// Splits "#tag" words (case-folded, without '#') from the full-text words.
+QString splitTags(const QString& userQuery, QStringList* tags)
+{
+    QString rest;
+    for (const QString& word : userQuery.split(u' ', Qt::SkipEmptyParts)) {
+        if (word.startsWith(u'#') && word.size() > 1 && !word.contains(u'"'))
+            tags->append(word.mid(1).toCaseFolded());
+        else
+            rest += word + u' ';
+    }
+    return rest.trimmed();
+}
+
+// Lines a..b (0-based, inclusive) of `body`, without '\r'.
+QString sliceLines(const QString& body, int a, int b)
+{
+    qsizetype pos = 0;
+    for (int i = 0; i < a && pos >= 0; ++i) {
+        pos = body.indexOf(u'\n', pos);
+        if (pos >= 0) ++pos;
+    }
+    if (pos < 0) return {};
+    qsizetype end = pos;
+    for (int i = a; i <= b && end >= 0; ++i) {
+        end = body.indexOf(u'\n', end);
+        if (end >= 0 && i < b) ++end;
+    }
+    QString s = body.mid(pos, end < 0 ? -1 : end - pos);
+    s.remove(u'\r');
+    return s;
+}
+
+// The date in a daily note's name (YYYY-MM-DD anywhere in it), else the modification time.
+qint64 passageDate(const QString& path, qint64 mtimeMs)
+{
+    static const QRegularExpression re(uR"((\d{4})-(\d{2})-(\d{2}))"_s);
+    const QRegularExpressionMatch m = re.match(paths::linkName(path));
+    if (m.hasMatch()) {
+        const QDate d(m.captured(1).toInt(), m.captured(2).toInt(), m.captured(3).toInt());
+        if (d.isValid()) return QDateTime(d, QTime(12, 0)).toMSecsSinceEpoch();
+    }
+    return mtimeMs;
+}
+
+constexpr qsizetype kMaxPassageText = 4000;
 
 } // namespace
 
@@ -211,12 +270,22 @@ void IndexStore::prepareStatements()
     st_->updateStamp = db_.prepare("UPDATE files SET size = ?, mtime = ? WHERE path = ?");
     st_->insertTask = db_.prepare("INSERT INTO tasks(file_id, line, done, text, due) VALUES (?, ?, ?, ?, ?)");
     st_->docFreq = db_.prepare("SELECT doc FROM fts_vocab WHERE term = ?");
+    st_->insertChunk =
+        db_.prepare("INSERT INTO chunks(file_id, start_line, end_line, context) VALUES (?, ?, ?, ?)");
+    st_->insertChunkFts = db_.prepare("INSERT INTO chunk_fts(rowid, context, body) VALUES (?, ?, ?)");
     static const char* const deletes[] = {
-        "DELETE FROM links WHERE file_id = ?",    "DELETE FROM tags WHERE file_id = ?",
-        "DELETE FROM headings WHERE file_id = ?", "DELETE FROM blocks WHERE file_id = ?",
-        "DELETE FROM aliases WHERE file_id = ?",  "DELETE FROM fts WHERE rowid = ?",
-        "DELETE FROM tasks WHERE file_id = ?",    "DELETE FROM files WHERE id = ?"};
-    for (int i = 0; i < 8; ++i)
+        "DELETE FROM links WHERE file_id = ?",
+        "DELETE FROM tags WHERE file_id = ?",
+        "DELETE FROM headings WHERE file_id = ?",
+        "DELETE FROM blocks WHERE file_id = ?",
+        "DELETE FROM aliases WHERE file_id = ?",
+        "DELETE FROM fts WHERE rowid = ?",
+        "DELETE FROM tasks WHERE file_id = ?",
+        "DELETE FROM chunk_fts WHERE rowid IN (SELECT id FROM chunks WHERE file_id = ?)",
+        "DELETE FROM chunks WHERE file_id = ?",
+        "DELETE FROM files WHERE id = ?"};
+    static_assert(std::size(deletes) == std::extent_v<decltype(Statements::deletes)>);
+    for (std::size_t i = 0; i < std::size(deletes); ++i)
         st_->deletes[i] = db_.prepare(deletes[i]);
 }
 
@@ -302,7 +371,8 @@ bool IndexStore::updateStamp(const QString& path, qint64 size, qint64 mtimeMs)
 }
 
 bool IndexStore::putNote(const QString& path, qint64 size, qint64 mtimeMs, const QByteArray& hash,
-                         const NoteMetadata& meta, const QString& body, bool known)
+                         const NoteMetadata& meta, const QString& body, const std::vector<Chunk>& chunks,
+                         bool known)
 {
     if (known) removeFile(path);
     sql::Statement& ins = st_->insertFile;
@@ -345,8 +415,18 @@ bool IndexStore::putNote(const QString& path, qint64 size, qint64 mtimeMs, const
         task.bind(1, id).bind(2, t.line).bind(3, t.done ? 1 : 0).bind(4, t.text).bind(5, t.due);
         task.exec();
     }
+    const QString title = paths::linkName(path);
+    sql::Statement& chunk = st_->insertChunk;
+    sql::Statement& chunkFts = st_->insertChunkFts;
+    for (const Chunk& c : chunks) {
+        chunk.bind(1, id).bind(2, c.startLine).bind(3, c.endLine).bind(4, c.context);
+        if (!chunk.exec()) continue;
+        // The note's name counts as context, so a passage in "Sleep.md" matches "sleep".
+        chunkFts.bind(1, db_.lastInsertId()).bind(2, title + u' ' + c.context).bind(3, c.text);
+        chunkFts.exec();
+    }
     sql::Statement& fts = st_->insertFts;
-    fts.bind(1, id).bind(2, paths::linkName(path)).bind(3, body);
+    fts.bind(1, id).bind(2, title).bind(3, body);
     return fts.exec();
 }
 
@@ -613,14 +693,8 @@ std::vector<SearchHit> IndexStore::search(const QString& userQueryIn, int limit)
     std::vector<SearchHit> out;
     // "#tag" words filter by tag (nested tags included; all must match); the rest is full text.
     QStringList tags;
-    QString userQuery;
-    for (const QString& word : userQueryIn.split(u' ', Qt::SkipEmptyParts)) {
-        if (word.startsWith(u'#') && word.size() > 1 && !word.contains(u'"'))
-            tags.append(word.mid(1).toCaseFolded());
-        else
-            userQuery += word + u' ';
-    }
-    const QString q = ftsQuery(userQuery.trimmed());
+    const QString userQuery = splitTags(userQueryIn, &tags);
+    const QString q = ftsQuery(userQuery);
     if (q.isEmpty() && tags.isEmpty()) return out;
 
     QString tagFilter;
@@ -657,6 +731,100 @@ std::vector<SearchHit> IndexStore::search(const QString& userQueryIn, int limit)
             out[i].snippet = makeSnippet(q.isEmpty() ? sim::contentText(body.text(0)) : body.text(0), terms);
         body.reset();
     }
+    return out;
+}
+
+void IndexStore::fillPassages(std::vector<Passage>& passages, const std::vector<qint64>& fileIds,
+                              const QStringList& terms, qsizetype snippetLength)
+{
+    sql::Statement body = db_.prepare("SELECT body FROM fts WHERE rowid = ?");
+    QHash<qint64, QString> bodies;
+    for (std::size_t i = 0; i < passages.size(); ++i) {
+        auto it = bodies.constFind(fileIds[i]);
+        if (it == bodies.constEnd()) {
+            body.bind(1, fileIds[i]);
+            it = bodies.insert(fileIds[i], body.step() ? body.text(0) : QString());
+            body.reset();
+        }
+        Passage& p = passages[i];
+        p.text = sliceLines(*it, p.startLine, p.endLine);
+        if (p.text.size() > kMaxPassageText) p.text = p.text.left(kMaxPassageText) + u'…';
+        p.snippet = makeSnippet(p.text, terms, snippetLength / 4, snippetLength);
+    }
+}
+
+std::vector<Passage> IndexStore::searchPassages(const QString& userQueryIn, int limit)
+{
+    std::vector<Passage> out;
+    QStringList tags;
+    const QString userQuery = splitTags(userQueryIn, &tags);
+    const QString q = ftsQuery(userQuery);
+    if (q.isEmpty() && tags.isEmpty()) return out;
+    // A tag counts for a passage if it's written inside it, or in the note's frontmatter (line -1).
+    QString tagFilter;
+    for (int i = 0; i < tags.size(); ++i) {
+        const QString p = u"?"_s + QString::number(i + 3);
+        tagFilter += u" AND EXISTS (SELECT 1 FROM tags t WHERE t.file_id = c.file_id AND (t.tag_key = "_s +
+                     p + u" OR substr(t.tag_key, 1, length("_s + p + u") + 1) = "_s + p +
+                     u" || '/') AND (t.line < 0 OR t.line BETWEEN c.start_line AND c.end_line))"_s;
+    }
+    const QString cols = u"SELECT c.file_id, f.path, c.start_line, c.end_line, c.context, f.mtime, "_s;
+    const QString sqlText =
+        q.isEmpty()
+            ? cols + u"0.0 FROM chunks c JOIN files f ON f.id = c.file_id WHERE ?1 = ?1"_s + tagFilter +
+                  u" ORDER BY f.path, c.start_line LIMIT ?2"_s
+            : cols +
+                  u"bm25(chunk_fts, 2.0, 1.0) AS r FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid "
+                  "JOIN files f ON f.id = c.file_id WHERE chunk_fts MATCH ?1"_s +
+                  tagFilter + u" ORDER BY r LIMIT ?2"_s;
+    const QByteArray sqlUtf8 = sqlText.toUtf8();
+    sql::Statement s = db_.prepare(sqlUtf8.constData());
+    s.bind(1, q.isEmpty() ? u"x"_s : q).bind(2, limit);
+    for (int i = 0; i < tags.size(); ++i)
+        s.bind(i + 3, tags[i]);
+    std::vector<qint64> ids;
+    while (s.step()) {
+        Passage p;
+        p.path = s.text(1);
+        p.startLine = s.int32(2);
+        p.endLine = s.int32(3);
+        p.context = s.text(4);
+        p.dateMs = passageDate(p.path, s.int64(5));
+        p.score = s.real(6);
+        out.push_back(std::move(p));
+        ids.push_back(s.int64(0));
+    }
+    fillPassages(out, ids, snippetTerms(userQuery), 480);
+    return out;
+}
+
+std::vector<Passage> IndexStore::passagesMatchingAny(const QStringList& terms, const QString& excludePath,
+                                                     int limit)
+{
+    std::vector<Passage> out;
+    if (terms.isEmpty()) return out;
+    QStringList quoted;
+    for (const QString& t : terms)
+        quoted.append(quoteFtsTerm(t));
+    sql::Statement s =
+        db_.prepare("SELECT c.file_id, f.path, c.start_line, c.end_line, c.context, f.mtime, bm25(chunk_fts, "
+                    "2.0, 1.0) AS r "
+                    "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid JOIN files f ON f.id = c.file_id "
+                    "WHERE chunk_fts MATCH ?1 AND f.path <> ?2 ORDER BY r LIMIT ?3");
+    s.bind(1, quoted.join(u" OR "_s)).bind(2, excludePath).bind(3, limit);
+    std::vector<qint64> ids;
+    while (s.step()) {
+        Passage p;
+        p.path = s.text(1);
+        p.startLine = s.int32(2);
+        p.endLine = s.int32(3);
+        p.context = s.text(4);
+        p.dateMs = passageDate(p.path, s.int64(5));
+        p.score = s.real(6);
+        out.push_back(std::move(p));
+        ids.push_back(s.int64(0));
+    }
+    fillPassages(out, ids, terms, 240); // shown in the side panel
     return out;
 }
 

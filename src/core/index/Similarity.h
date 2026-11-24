@@ -22,6 +22,7 @@ std::vector<QString> tokenize(QStringView text);
 QString contentText(QStringView noteText);
 
 bool isStopWord(QStringView term);
+const QStringList& stopWords();
 
 // Term frequencies of useful terms (no stop words, numbers or 1–2 letter words).
 QHash<QString, int> termFrequencies(QStringView content);

@@ -115,6 +115,6 @@ If these presets don't exist yet, create them as part of M0.
 Planned shape, so v1 doesn't block it:
 
 - Embeddings come from the user's existing local model over HTTP (OpenAI-compatible `/v1/embeddings`), behind a build option that brings in QtNetwork.
-- Notes are split into chunks by heading or paragraph. Vectors are stored as float32 BLOBs in a separate SQLite file in the same cache directory, keyed by (path, chunk index, content hash, model id). Only changed chunks get re-embedded.
+- Notes are split into chunks by `core/index/Chunker` (topic-sized passages; already used by passage search and related passages, with their line ranges in the index's `chunks` table). Vectors are stored as float32 BLOBs in a separate SQLite file in the same cache directory, keyed by (path, chunk index, content hash, model id). Only changed chunks get re-embedded.
 - Search is a brute-force cosine similarity scan over normalised vectors, with no vector-DB dependency. Results are blended with FTS5 scores for hybrid ranking.
 - **v1 only needs one thing for this:** the index records a content hash per note.

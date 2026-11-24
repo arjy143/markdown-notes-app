@@ -8,6 +8,8 @@
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QComboBox>
+#include <QDateTime>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
@@ -40,6 +42,21 @@ QString snippetToHtml(const QString& s)
     out.replace(QChar(2), u"</b>"_s);
     out.replace(u'\n', u' ');
     return out;
+}
+
+QString passageDate(const Passage& p)
+{
+    return QDateTime::fromMSecsSinceEpoch(p.dateMs).date().toString(Qt::ISODate);
+}
+
+// "Note name  date · heading" on the first line, then the passage.
+QString passageHtml(const Passage& p, const QString& extra)
+{
+    QString meta = passageDate(p);
+    if (!p.context.isEmpty()) meta += u" · "_s + p.context;
+    if (!extra.isEmpty()) meta += u" · "_s + extra;
+    return u"<b>"_s + htmlEscape(paths::linkName(p.path)) + u"</b> <span style=\"color:gray\">"_s +
+           htmlEscape(meta) + u"</span><br/>"_s + snippetToHtml(p.snippet);
 }
 
 QTreeWidget* makeTree(QWidget* parent)
@@ -105,10 +122,24 @@ SearchPanel::SearchPanel(VaultService* vault, QWidget* parent) : QWidget(parent)
     edit_ = new QLineEdit(this);
     edit_->setPlaceholderText(tr("Search notes…"));
     edit_->setClearButtonEnabled(true);
+    auto* options = new QHBoxLayout;
+    mode_ = new QComboBox(this);
+    mode_->addItems({tr("Notes"), tr("Passages")});
+    mode_->setToolTip(tr("Notes: whole notes that match.\nPassages: just the parts of notes that match, "
+                         "so a topic spread over many (daily) notes reads as one list."));
+    mode_->setCurrentIndex(std::clamp(QSettings().value(u"search/mode"_s, 0).toInt(), 0, 1));
+    sort_ = new QComboBox(this);
+    sort_->addItems({tr("Best match"), tr("Newest first"), tr("Oldest first")});
+    sort_->setCurrentIndex(std::clamp(QSettings().value(u"search/passageSort"_s, 0).toInt(), 0, 2));
+    sort_->setEnabled(mode_->currentIndex() == 1);
+    options->addWidget(mode_, 1);
+    options->addWidget(sort_, 1);
     status_ = new QLabel(this);
     status_->setEnabled(false);
     results_ = makeTree(this);
+    results_->setRootIsDecorated(false);
     lay->addWidget(edit_);
+    lay->addLayout(options);
     lay->addWidget(status_);
     lay->addWidget(results_, 1);
     debounce_ = new QTimer(this);
@@ -117,14 +148,22 @@ SearchPanel::SearchPanel(VaultService* vault, QWidget* parent) : QWidget(parent)
     connect(debounce_, &QTimer::timeout, this, &SearchPanel::run);
     connect(edit_, &QLineEdit::textChanged, debounce_, qOverload<>(&QTimer::start));
     connect(edit_, &QLineEdit::returnPressed, this, &SearchPanel::run);
-    connect(results_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* it) {
-        Q_EMIT openRequested(it->data(0, kPathRole).toString(), -1,
-                             edit_->text().section(u' ', 0, 0).remove(u'"'));
+    connect(mode_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        QSettings().setValue(u"search/mode"_s, i);
+        sort_->setEnabled(i == 1);
+        run();
     });
-    connect(results_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* it) {
-        Q_EMIT openRequested(it->data(0, kPathRole).toString(), -1,
-                             edit_->text().section(u' ', 0, 0).remove(u'"'));
+    connect(sort_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        QSettings().setValue(u"search/passageSort"_s, i);
+        showPassages();
     });
+    // Notes open at the first match; passages at their first line.
+    auto open = [this](QTreeWidgetItem* it) {
+        Q_EMIT openRequested(it->data(0, kPathRole).toString(), it->data(0, kLineRole).toInt(),
+                             edit_->text().section(u' ', 0, 0).remove(u'"'));
+    };
+    connect(results_, &QTreeWidget::itemActivated, this, open);
+    connect(results_, &QTreeWidget::itemClicked, this, open);
 }
 
 void SearchPanel::focusSearch(const QString& text)
@@ -140,7 +179,16 @@ void SearchPanel::run()
     const int req = ++request_;
     if (q.isEmpty()) {
         results_->clear();
+        passages_.clear();
         status_->clear();
+        return;
+    }
+    if (mode_->currentIndex() == 1) {
+        vault_->searchPassages(q, [this, req](std::vector<Passage> hits) {
+            if (req != request_) return;
+            passages_ = std::move(hits);
+            showPassages();
+        });
         return;
     }
     vault_->search(q, [this, req](std::vector<SearchHit> hits) {
@@ -151,6 +199,7 @@ void SearchPanel::run()
             top->setText(0, paths::linkName(h.path));
             top->setToolTip(0, h.path);
             top->setData(0, kPathRole, h.path);
+            top->setData(0, kLineRole, -1);
             top->setData(0, kHtmlRole,
                          QString(u"<b>"_s + htmlEscape(paths::linkName(h.path)) +
                                  u"</b> <span style=\"color:gray\">"_s + htmlEscape(paths::folderOf(h.path)) +
@@ -159,6 +208,35 @@ void SearchPanel::run()
         status_->setText(hits.size() >= 200 ? tr("200+ notes")
                                             : tr("%n note(s)", nullptr, static_cast<int>(hits.size())));
     });
+}
+
+void SearchPanel::showPassages()
+{
+    if (mode_->currentIndex() != 1) return;
+    results_->clear();
+    std::vector<const Passage*> order;
+    order.reserve(passages_.size());
+    for (const Passage& p : passages_)
+        order.push_back(&p);
+    // Best match is the index's order; by date reads a topic as a timeline.
+    if (sort_->currentIndex() == 1)
+        std::stable_sort(order.begin(), order.end(), [](auto a, auto b) { return a->dateMs > b->dateMs; });
+    else if (sort_->currentIndex() == 2)
+        std::stable_sort(order.begin(), order.end(), [](auto a, auto b) { return a->dateMs < b->dateMs; });
+    QSet<QString> notes;
+    for (const Passage* p : order) {
+        auto* it = new QTreeWidgetItem(results_);
+        it->setText(0, paths::linkName(p->path));
+        it->setToolTip(0, p->path);
+        it->setData(0, kPathRole, p->path);
+        it->setData(0, kLineRole, p->startLine);
+        it->setData(0, kHtmlRole, passageHtml(*p, QString()));
+        notes.insert(p->path);
+    }
+    const int n = static_cast<int>(passages_.size());
+    status_->setText(n >= 200 ? tr("200+ passages")
+                              : tr("%n passage(s)", nullptr, n) + u' ' +
+                                    tr("in %n note(s)", nullptr, static_cast<int>(notes.size())));
 }
 
 // --- backlinks ------------------------------------------------------------------
@@ -182,27 +260,68 @@ BacklinksPanel::BacklinksPanel(VaultService* vault, QWidget* parent) : QWidget(p
 
 void BacklinksPanel::setNote(const QString& path)
 {
+    if (path != path_) relatedPassages_.clear();
     path_ = path;
     refresh();
+}
+
+void BacklinksPanel::setCursorPassage(const QString& noteText, int line)
+{
+    if (path_.isEmpty() || !vault_->isOpen()) return;
+    const int req = ++passageRequest_;
+    const QString path = path_;
+    vault_->relatedPassages(noteText, line, path, [this, req, path](std::vector<Passage> found) {
+        if (req != passageRequest_ || path != path_) return;
+        auto key = [](const std::vector<Passage>& v) {
+            QStringList k;
+            for (const Passage& p : v)
+                k.append(p.path + u':' + QString::number(p.startLine));
+            return k;
+        };
+        if (key(found) == key(relatedPassages_) && passages_ != nullptr &&
+            passages_->childCount() == int(found.size()))
+            return; // same list: don't rebuild (and flicker) as the cursor moves within a passage
+        relatedPassages_ = std::move(found);
+        showRelatedPassages();
+    });
+}
+
+void BacklinksPanel::showRelatedPassages()
+{
+    if (passages_ == nullptr) return;
+    qDeleteAll(passages_->takeChildren());
+    for (const Passage& p : relatedPassages_) {
+        auto* item = new QTreeWidgetItem(passages_);
+        item->setData(0, kHtmlRole, passageHtml(p, p.reason));
+        item->setData(0, kPathRole, p.path);
+        item->setData(0, kLineRole, p.startLine);
+        item->setToolTip(0, p.text.left(1500));
+    }
+    passages_->setText(0, tr("Related to this paragraph (%1)").arg(relatedPassages_.size()));
 }
 
 void BacklinksPanel::refresh()
 {
     tree_->clear();
-    linked_ = related_ = unlinked_ = nullptr;
+    linked_ = related_ = passages_ = unlinked_ = nullptr;
     mentionsLoaded_ = false;
     if (path_.isEmpty() || !vault_->isOpen()) return;
     linked_ = new QTreeWidgetItem(tree_, {tr("Linked mentions")});
     related_ = new QTreeWidgetItem(tree_, {tr("Related notes")});
+    passages_ = new QTreeWidgetItem(tree_, {tr("Related to this paragraph")});
+    passages_->setToolTip(0, tr("Passages in other notes about the paragraph the cursor is in"));
     unlinked_ = new QTreeWidgetItem(tree_, {tr("Unlinked mentions")});
     unlinked_->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
     QFont bold = linked_->font(0);
     bold.setBold(true);
     linked_->setFont(0, bold);
     related_->setFont(0, bold);
+    passages_->setFont(0, bold);
     unlinked_->setFont(0, bold);
     linked_->setExpanded(true);
     related_->setExpanded(true);
+    passages_->setExpanded(true);
+    showRelatedPassages();
     const int req = ++request_;
     const QString path = path_;
     vault_->backlinks(path, [this, req](std::vector<Backlink> links) {

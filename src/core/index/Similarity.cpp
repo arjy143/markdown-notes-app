@@ -78,9 +78,9 @@ QString contentText(QStringView noteText)
     return text;
 }
 
-bool isStopWord(QStringView w)
+const QStringList& stopWords()
 {
-    static const QSet<QString> stop = [] {
+    static const QStringList list = [] {
         const char* words =
             "a about above after again against all also am an and any are as at be because been before being "
             "below "
@@ -97,11 +97,14 @@ bool isStopWord(QStringView w)
             "were what when where which while who whom why will with within without would yes yet you your "
             "yours "
             "yourself yourselves get got make made see also etc e g ie eg new two first just way well";
-        QSet<QString> s;
-        for (const QString& t : QString::fromLatin1(words).split(u' ', Qt::SkipEmptyParts))
-            s.insert(t);
-        return s;
+        return QString::fromLatin1(words).split(u' ', Qt::SkipEmptyParts);
     }();
+    return list;
+}
+
+bool isStopWord(QStringView w)
+{
+    static const QSet<QString> stop(stopWords().cbegin(), stopWords().cend());
     return stop.contains(w.toString());
 }
 

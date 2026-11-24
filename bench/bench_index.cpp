@@ -1,6 +1,8 @@
 // Indexing, search and backlink benchmarks (core only, no GUI).
 #include "BenchUtil.h"
+#include "core/index/Chunker.h"
 #include "core/index/VaultService.h"
+#include "core/parse/Frontmatter.h"
 #include "core/parse/NoteMetadata.h"
 #include "core/vault/VaultScanner.h"
 
@@ -60,14 +62,40 @@ int main(int argc, char** argv)
     cli.addOption({u"verbose"_s, u"Print health-report details."_s});
     cli.addOption(
         {u"vault"_s, u"Vault to benchmark (it is only read, apart from .markdown-notes/)."_s, u"path"_s});
+    cli.addOption({u"chunks"_s, u"Print how a note is split into passages, then exit."_s, u"note"_s});
+    cli.addOption({u"passages"_s, u"Print the passages a search finds, then exit."_s, u"query"_s});
     cli.process(app);
     const QString vault = cli.value(u"vault"_s);
     if (vault.isEmpty()) {
         std::fprintf(stderr, "usage: bench_index --vault <path>\n");
         return 2;
     }
+    if (cli.isSet(u"chunks"_s)) {
+        QFile f(vault + u'/' + cli.value(u"chunks"_s));
+        if (!f.open(QIODevice::ReadOnly)) return 1;
+        const QByteArray raw = f.readAll();
+        const Frontmatter fm = parseFrontmatter(raw);
+        for (const Chunk& c : chunkNote(QString::fromUtf8(raw), fm.present ? fm.closingLine + 1 : 0))
+            std::printf("--- lines %d-%d  [%s]\n%s\n", c.startLine, c.endLine, qPrintable(c.context),
+                        qPrintable(c.text));
+        return 0;
+    }
     QTemporaryDir cache;
     const QString db = cache.path() + u"/index.sqlite"_s;
+    if (cli.isSet(u"passages"_s)) {
+        VaultService svc;
+        QString err;
+        svc.open(vault, &err, db);
+        double ms = 0;
+        if (!waitSignal(svc, &ms)) return 1;
+        const auto hits = await<std::vector<Passage>>(
+            [&](auto cb) { svc.searchPassages(cli.value(u"passages"_s), cb); }, &ms);
+        for (const Passage& p : hits)
+            std::printf("--- %s:%d-%d  [%s]\n%s\n", qPrintable(p.path), p.startLine, p.endLine,
+                        qPrintable(p.context), qPrintable(p.text.left(300)));
+        std::printf("%zu passages, %.1f ms\n", hits.size(), ms);
+        return 0;
+    }
 
     // Raw parse throughput.
     {
@@ -90,6 +118,27 @@ int main(int argc, char** argv)
         std::printf("vault: %d notes, %zu files, %.1f MB of Markdown\n", notes, scan.files.size(),
                     static_cast<double>(bytes) / 1e6);
         bench::report("read+parse all notes (1 thread)", ms, "ms");
+
+        // Passage chunking on its own.
+        std::size_t chunks = 0;
+        qint64 lines = 0;
+        t.restart();
+        for (const FileEntry& e : scan.files) {
+            if (e.kind != FileKind::Note) continue;
+            QFile f(vault + u'/' + e.path);
+            if (!f.open(QIODevice::ReadOnly)) continue;
+            const QByteArray raw = f.readAll();
+            const Frontmatter fm = parseFrontmatter(raw);
+            for (const Chunk& c : chunkNote(QString::fromUtf8(raw), fm.present ? fm.closingLine + 1 : 0)) {
+                ++chunks;
+                lines += c.endLine - c.startLine + 1;
+            }
+        }
+        bench::report("chunk all notes into passages (1 thread)", static_cast<double>(t.nsecsElapsed()) / 1e6,
+                      "ms");
+        std::printf("  %zu passages, %.1f per note, %.1f lines each\n", chunks,
+                    notes ? static_cast<double>(chunks) / notes : 0.0,
+                    chunks ? static_cast<double>(lines) / static_cast<double>(chunks) : 0.0);
     }
 
     double coldMs = 0;
@@ -142,6 +191,18 @@ int main(int argc, char** argv)
         bench::report("full-text search (median)", bench::median(times), "ms", 30, 100);
         bench::report("full-text search (p95)", bench::percentile(times, 0.95), "ms", 30, 100);
 
+        // Passage search (same queries).
+        std::vector<double> ptimes;
+        for (int rep = 0; rep < 3; ++rep) {
+            for (const QString& q : queries) {
+                double ms = 0;
+                await<std::vector<Passage>>([&](auto cb) { svc.searchPassages(q, cb); }, &ms);
+                ptimes.push_back(ms);
+            }
+        }
+        bench::report("passage search (median)", bench::median(ptimes), "ms", 30, 100);
+        bench::report("passage search (p95)", bench::percentile(ptimes, 0.95), "ms", 30, 100);
+
         // Backlinks.
         std::vector<double> bl;
         const auto& files = svc.snapshot().files();
@@ -166,6 +227,23 @@ int main(int argc, char** argv)
         }
         bench::report("related notes (median)", bench::median(rel), "ms");
         bench::report("related notes (max)", rel.empty() ? 0 : *std::max_element(rel.begin(), rel.end()),
+                      "ms");
+
+        // Related passages for the paragraph in the middle of a sample of notes.
+        std::vector<double> rp;
+        for (int i = 0; i < 20 && !files.empty(); ++i) {
+            const VaultFile& f = files[rng.bounded(static_cast<quint32>(files.size()))];
+            if (f.kind != FileKind::Note) continue;
+            QFile file(vault + u'/' + f.path);
+            if (!file.open(QIODevice::ReadOnly)) continue;
+            const QString text = QString::fromUtf8(file.readAll());
+            const int line = static_cast<int>(text.count(u'\n') / 2);
+            double ms = 0;
+            await<std::vector<Passage>>([&](auto cb) { svc.relatedPassages(text, line, f.path, cb); }, &ms);
+            rp.push_back(ms);
+        }
+        bench::report("related passages (median)", bench::median(rp), "ms");
+        bench::report("related passages (max)", rp.empty() ? 0 : *std::max_element(rp.begin(), rp.end()),
                       "ms");
 
         double healthMs = 0;

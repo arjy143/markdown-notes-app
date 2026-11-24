@@ -21,7 +21,8 @@ Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows
 ## Beyond Obsidian
 
 - **Vault health** (Tools): broken links, orphan and empty notes, unused attachments, look-alike tags, near-duplicate notes, and notes with too few category tags.
-- **Related notes** in the right panel, based on shared words, links and tags.
+- **Passage search:** switch Search from Notes to Passages to get just the parts of notes that match, not whole notes. Sorted newest or oldest first, a topic spread over months of daily notes reads as one timeline. `#tag` filters keep passages that contain the tag.
+- **Related notes** in the right panel, based on shared words, links and tags, and **related to this paragraph**: passages in other notes about the paragraph you're in.
 - **Tasks** tab: every `- [ ]` in the vault, with due dates (`2025-01-31` or `due:2025-01-31`). Tick to complete; Delete removes a task.
 - **Tags as structure:** clicking a tag shows its notes as a tree grouped by their other tags. Right-click a tag to pin it to the top of the list. Vault settings can count properties like `primary` / `secondary` as tags and define category tags. Search accepts `#tag` filters.
 - **Link suggestions:** mentions of note names are underlined as you type; Alt+Enter links one.

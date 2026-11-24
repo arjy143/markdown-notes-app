@@ -45,6 +45,11 @@ public:
     void backlinks(const QString& path, Callback<std::vector<Backlink>> cb);
     void unlinkedMentions(const QString& path, Callback<std::vector<Mention>> cb);
     void search(const QString& query, Callback<std::vector<SearchHit>> cb);
+    void searchPassages(const QString& query, Callback<std::vector<Passage>> cb);
+    // Passages in other notes related to the passage at `line` of `noteText` (the open
+    // note's buffer, which may be ahead of the file on disk).
+    void relatedPassages(const QString& noteText, int line, const QString& path,
+                         Callback<std::vector<Passage>> cb, int limit = 5);
     void headings(const QString& path, Callback<std::vector<HeadingInfo>> cb);
     void blocks(const QString& path, Callback<std::vector<BlockInfo>> cb);
     void filesWithTag(const QString& tag, Callback<QStringList> cb);

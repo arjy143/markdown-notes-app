@@ -161,6 +161,7 @@ private:
     QLabel* statusPath_ = nullptr;
     QLabel* statusInfo_ = nullptr;
     QTimer* autosave_ = nullptr;
+    QTimer* passageTimer_ = nullptr; // related passages, once the cursor rests in a paragraph
     QFileSystemWatcher* noteWatcher_ = nullptr;
     std::vector<HistoryEntry> history_;
     int historyIndex_ = -1;

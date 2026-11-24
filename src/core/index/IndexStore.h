@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Chunker.h"
 #include "IndexTypes.h"
 #include "Sqlite.h"
 #include "core/parse/NoteMetadata.h"
@@ -36,7 +37,7 @@ struct StoredLink {
 
 class IndexStore {
 public:
-    static constexpr int kSchemaVersion = 3;
+    static constexpr int kSchemaVersion = 4;
 
     static QString vaultId(const QString& vaultRoot);
     static QString defaultPath(const QString& vaultRoot);
@@ -63,7 +64,8 @@ public:
     // Inserts or replaces one file's row and all its metadata. Call inside a transaction.
     // `known` = the path may already be in the index (its old rows are removed first).
     bool putNote(const QString& path, qint64 size, qint64 mtimeMs, const QByteArray& hash,
-                 const NoteMetadata& meta, const QString& body, bool known = true);
+                 const NoteMetadata& meta, const QString& body, const std::vector<Chunk>& chunks,
+                 bool known = true);
     bool putAttachment(const QString& path, FileKind kind, qint64 size, qint64 mtimeMs, bool known = true);
     bool updateStamp(const QString& path, qint64 size, qint64 mtimeMs);
     bool removeFile(const QString& path);
@@ -91,6 +93,11 @@ public:
     // Every note body, for whole-vault analysis (calls fn(path, body)).
     void forEachBody(const std::function<void(const QString&, const QString&)>& fn);
     std::vector<SearchHit> search(const QString& userQuery, int limit);
+    // Passages matching the query, best first. "#tag" words keep passages that contain
+    // the tag, or whose note has it in its frontmatter.
+    std::vector<Passage> searchPassages(const QString& userQuery, int limit);
+    // Passages matching any of the terms, best BM25 first, leaving out `excludePath`.
+    std::vector<Passage> passagesMatchingAny(const QStringList& terms, const QString& excludePath, int limit);
     QStringList ftsCandidates(const QString& phrase, int limit);
 
     // Builds an FTS5 MATCH expression from free text (prefix match on the last term).
@@ -100,13 +107,16 @@ private:
     bool createSchema(QString* error);
     void prepareStatements();
     qint64 idFor(const QString& path);
+    // Fills in each passage's text (from the stored note bodies) and snippet.
+    void fillPassages(std::vector<Passage>& passages, const std::vector<qint64>& fileIds,
+                      const QStringList& snippetTerms, qsizetype snippetLength);
 
     sql::Database db_;
     // Prepared once per connection: indexing runs these tens of thousands of times.
     struct Statements {
         sql::Statement selectId, insertFile, insertLink, insertTag, insertHeading, insertBlock, insertAlias,
-            insertFts, updateStamp, insertTask, docFreq;
-        sql::Statement deletes[8];
+            insertFts, updateStamp, insertTask, docFreq, insertChunk, insertChunkFts;
+        sql::Statement deletes[10];
     };
     std::unique_ptr<Statements> st_;
 };
