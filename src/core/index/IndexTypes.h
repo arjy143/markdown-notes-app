@@ -69,6 +69,17 @@ struct Passage {
     QString reason;    // related passages: the words they share
 };
 
+// Passages waiting to be embedded for semantic search, and how far along it is.
+struct EmbeddingJob {
+    QByteArray hash; // passageHash()
+    QString text;    // passageEmbeddingText()
+};
+struct EmbeddingBatch {
+    std::vector<EmbeddingJob> jobs;
+    int done = 0;  // passages with a vector for the model
+    int total = 0; // passages in the vault (distinct contents)
+};
+
 struct HeadingInfo {
     int level = 1;
     QString text;

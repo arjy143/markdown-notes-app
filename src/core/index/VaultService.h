@@ -46,6 +46,16 @@ public:
     void unlinkedMentions(const QString& path, Callback<std::vector<Mention>> cb);
     void search(const QString& query, Callback<std::vector<SearchHit>> cb);
     void searchPassages(const QString& query, Callback<std::vector<Passage>> cb);
+
+    // Semantic search (see IndexWorker). The vectors themselves come from the assistant.
+    void setEmbeddingModel(const QString& model);
+    void pendingEmbeddings(const QString& model, int limit, Callback<EmbeddingBatch> cb);
+    void storeEmbeddings(const QString& model, std::vector<QByteArray> hashes,
+                         std::vector<std::vector<float>> vectors, Callback<int> cb);
+    void pruneEmbeddings(Callback<int> cb);
+    void hybridPassages(const QString& query, std::vector<float> vector, const QString& model, bool anyTerms,
+                        int limit, Callback<std::vector<Passage>> cb);
+    void exampleFrontmatter(const QString& path, Callback<QStringList> cb, int limit = 3);
     // Passages in other notes related to the passage at `line` of `noteText` (the open
     // note's buffer, which may be ahead of the file on disk).
     void relatedPassages(const QString& noteText, int line, const QString& path,

@@ -2,6 +2,7 @@
 
 #include "Similarity.h"
 
+#include <QCryptographicHash>
 #include <QStringList>
 
 #include <algorithm>
@@ -414,6 +415,23 @@ std::vector<Chunk> chunkNote(QStringView text, int firstLine, const ChunkOptions
         chunks.push_back({u.start, u.end, contexts.value(u.section), joined(u.start, u.end)});
     }
     return chunks;
+}
+
+QString passageEmbeddingText(const QString& title, const QString& context, const QString& text)
+{
+    constexpr qsizetype kMax = 1500; // ~400 tokens: within what small embedding models accept
+    QString s = title;
+    if (!context.isEmpty()) s += u" › "_s + context;
+    s += u'\n' + text;
+    if (s.size() > kMax) s.truncate(kMax);
+    return s;
+}
+
+QByteArray passageHash(const QString& title, const QString& context, const QString& text)
+{
+    return QCryptographicHash::hash(passageEmbeddingText(title, context, text).toUtf8(),
+                                    QCryptographicHash::Sha1)
+        .left(16);
 }
 
 const Chunk* chunkAtLine(const std::vector<Chunk>& chunks, int line)

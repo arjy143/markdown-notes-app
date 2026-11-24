@@ -42,6 +42,24 @@ public:
     // Passages in other notes about the same thing as the passage of `noteText` at `line`
     // (TF-IDF cosine over passages that share its most distinctive words).
     std::vector<Passage> relatedPassages(const QString& noteText, int line, const QString& path, int limit);
+
+    // Semantic search (vectors come from the assistant's embedding model).
+    // `model`: also used by related passages when the passage at the cursor has a vector.
+    void setEmbeddingModel(const QString& model) { embeddingModel_ = model; }
+    EmbeddingBatch pendingEmbeddings(const QString& model, int limit)
+    {
+        return store_.pendingEmbeddings(model, limit);
+    }
+    int storeEmbeddings(const QString& model, const std::vector<QByteArray>& hashes,
+                        const std::vector<std::vector<float>>& vectors);
+    int pruneEmbeddings() { return store_.pruneEmbeddings(); }
+    // Keyword and semantic matches, merged by reciprocal rank fusion. `anyTerms`: match
+    // passages with any of the query's words (questions) instead of all of them (search).
+    // Without a vector it is keyword search alone; with "#tag" filters too.
+    std::vector<Passage> hybridPassages(const QString& query, const std::vector<float>& vector,
+                                        const QString& model, bool anyTerms, int limit);
+    // Frontmatter blocks (without the "---" lines) of up to `limit` notes like this one.
+    QStringList exampleFrontmatter(const QString& path, int limit);
     std::vector<HeadingInfo> headings(const QString& path) { return store_.headings(path); }
     std::vector<BlockInfo> blocks(const QString& path) { return store_.blocks(path); }
     QStringList filesWithTag(const QString& tag) { return store_.filesWithTag(tag); }
@@ -93,6 +111,7 @@ private:
     QHash<QString, int> tagNotes_;
     int noteCount_ = 0;
     int statsGeneration_ = -1;
+    QString embeddingModel_;
     QFileSystemWatcher* watcher_ = nullptr;
     QTimer* debounce_ = nullptr;
     QSet<QString> pendingFolders_;

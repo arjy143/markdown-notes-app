@@ -35,6 +35,8 @@ public:
     int int32(int col) const { return static_cast<int>(int64(col)); }
     double real(int col) const;
     QByteArray blob(int col) const;
+    // The column's bytes without a copy (valid until the next step or reset); returns the size.
+    qsizetype blobView(int col, const void** data) const;
     bool isNull(int col) const;
 
 private:

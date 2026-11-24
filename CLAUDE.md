@@ -13,6 +13,7 @@ Three goals, in priority order:
 - **No web views, ever.** No QtWebEngine, QtWebView, QML or Qt Quick, and no embedded JavaScript engine. UI is Qt Widgets only.
 - **Never write a file the user did not change.** Opening, indexing, previewing or searching a note must not modify it, including its line endings, BOM, trailing newline or frontmatter formatting. Save only when the buffer differs from what was loaded.
 - **The only bulk write is renaming with link updates.** It must show the list of affected files and get confirmation first. No other feature edits notes the user hasn't opened, with one exception: **quick capture** may append to its configured target note (the inbox or today's daily note). It only appends at the end, keeps every existing byte, writes atomically, and refuses notes that aren't valid UTF-8 text (`core/capture/`). Likewise the **Tasks view** may tick off or delete one task in its note on an explicit click: the edit is planned against the note's current bytes after checking the task is still there, changes only that checkbox or that item's lines, and deletion asks first (`core/tasks/`).
+- **The assistant never writes notes.** Its suggestions (frontmatter, tags) are reviewed by the user and applied to the open note in the editor, as one undoable edit saved like typing. Ask and semantic search only read. Note text goes only to the server the user configured.
 - **Never write inside `.obsidian/`.** Read it once, when a vault is first opened, to import settings (see compat spec §8).
 - **Writes are atomic.** Use `QSaveFile`. On a write failure, keep the buffer dirty and show an error. Never lose typed text.
 - **Tests never touch a real vault.** Fixtures are copied to a temp directory (`QTemporaryDir`) before every test that writes.
@@ -23,7 +24,7 @@ Three goals, in priority order:
 
 - C++20, CMake (with `CMakePresets.json`), Ninja.
 - Compilers: GCC or Clang on Linux, MSVC on Windows. Warnings on (`-Wall -Wextra -Wpedantic` / `/W4`), treated as errors by the `ci` CMake preset (run locally; there is no hosted CI).
-- Qt 6 (current LTS or newer). Modules: **Core, Gui, Widgets** and **Test**, nothing else without asking. QtNetwork is reserved for the later semantic-search phase, behind a build option.
+- Qt 6 (current LTS or newer). Modules: **Core, Gui, Widgets** and **Test**, nothing else without asking. QtNetwork is used only by the assistant (`core/ai/AiClient`, `Assistant`), in the `mn_ai` library behind the `MN_AI` build option (on by default).
 - Vendored in `third_party/`, pinned to a version:
   - **md4c** (MIT). The Markdown parser, with Obsidian extensions layered on top (compat spec §2).
   - **SQLite amalgamation** (public domain), built with FTS5. Used through the C API, not the QtSql module.
@@ -42,6 +43,7 @@ src/core/    QtCore only (no QtGui/QtWidgets). All vault logic, unit-testable he
   capture/     quick capture: append to the inbox or today's daily note
   tasks/       ticking off and deleting a task from the Tasks view
   settings/    per-vault settings, import from .obsidian/
+  ai/          the local-model assistant: prompts, frontmatter merge (in mn_core); AiClient + Assistant (mn_ai, QtNetwork)
 src/ui/      Qt Widgets: main window, file tree, editor + highlighter, preview, quick switcher, search, backlinks, tags
 src/app/     main.cpp, application wiring
 tests/       Qt Test. tests/fixtures/ holds small hand-written vaults covering the compat spec's edge cases
@@ -110,11 +112,9 @@ If these presets don't exist yet, create them as part of M0.
 
 **Not in v1** (don't build any of these, and don't add abstractions for them): graph view, canvas, Bases, plugins, sync, mobile, live preview, tabs or split panes, spellcheck, macOS packaging.
 
-## Later: semantic search (not in v1)
+## Assistant and semantic search (MN_AI)
 
-Planned shape, so v1 doesn't block it:
-
-- Embeddings come from the user's existing local model over HTTP (OpenAI-compatible `/v1/embeddings`), behind a build option that brings in QtNetwork.
-- Notes are split into chunks by `core/index/Chunker` (topic-sized passages; already used by passage search and related passages, with their line ranges in the index's `chunks` table). Vectors are stored as float32 BLOBs in a separate SQLite file in the same cache directory, keyed by (path, chunk index, content hash, model id). Only changed chunks get re-embedded.
-- Search is a brute-force cosine similarity scan over normalised vectors, with no vector-DB dependency. Results are blended with FTS5 scores for hybrid ranking.
-- **v1 only needs one thing for this:** the index records a content hash per note.
+- The user's local model, over an OpenAI-compatible HTTP API (`/v1/chat/completions`, `/v1/embeddings`). The server and models are app-wide `QSettings` (`ai/*`); nothing is sent until they are set.
+- Notes are split into passages by `core/index/Chunker`. Each passage has a content hash (`chunks.hash`). Vectors are unit-length, stored as a float scale plus one int8 per dimension, in `embeddings.sqlite` next to the index (attached as `emb`), keyed by (passage hash, model), so they survive renames, moves and index rebuilds. Only passages without a vector get embedded, in the background, in batches.
+- Search is a brute-force dot product read from disk (nothing held in memory), fused with FTS5 passage results by reciprocal rank fusion. No vector-DB dependency.
+- Keep it simple: per-note actions on the open note, reviewed by the user. Anything that would edit notes in bulk needs the same confirm-the-list treatment as rename.

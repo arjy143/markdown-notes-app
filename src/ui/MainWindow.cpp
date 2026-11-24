@@ -12,6 +12,12 @@
 #include "ReadingView.h"
 #include "SettingsDialog.h"
 #include "TasksPanel.h"
+#include "core/ai/FrontmatterMerge.h"
+#ifdef MN_HAVE_AI
+#include "AiAskPanel.h"
+#include "AiDialogs.h"
+#include "core/ai/Assistant.h"
+#endif
 #include "core/capture/Capture.h"
 #include "core/index/IndexStore.h"
 #include "core/index/VaultService.h"
@@ -126,6 +132,11 @@ MainWindow::~MainWindow()
     disconnect(vault_, nullptr, this, nullptr);
     disconnect(noteWatcher_, nullptr, this, nullptr);
     disconnect(qApp, nullptr, this, nullptr);
+#ifdef MN_HAVE_AI
+    disconnect(assistant_, nullptr, this, nullptr);
+    assistant_->client().cancelAll();
+    assistant_->stopIndexing();
+#endif
 }
 
 void MainWindow::buildUi()
@@ -135,6 +146,7 @@ void MainWindow::buildUi()
 
     leftTabs_ = new QTabWidget(splitter_);
     leftTabs_->setDocumentMode(true);
+    leftTabs_->setUsesScrollButtons(false); // every tab stays visible; the labels are short
     tree_ = new QTreeView(leftTabs_);
     treeModel_ = new FileTreeModel(tree_);
     tree_->setModel(treeModel_);
@@ -288,6 +300,7 @@ void MainWindow::buildUi()
         QTimer::singleShot(150, this, &MainWindow::checkOpenNoteOnDisk);
     });
     qApp->installEventFilter(this);
+    buildAssistant();
 }
 
 void MainWindow::buildMenus()
@@ -372,6 +385,18 @@ void MainWindow::buildMenus()
     tools->addAction(tr("Vault &health…"), this, &MainWindow::showHealth);
     tools->addAction(tr("&Unresolved links…"), this, &MainWindow::showUnresolved);
     tools->addAction(tr("&Rebuild index"), this, [this] { vault_->rescan(); });
+#ifdef MN_HAVE_AI
+    tools->addSeparator();
+    tools->addAction(tr("Suggest &frontmatter and tags…"), QKeySequence(u"Ctrl+Shift+M"_s), this,
+                     &MainWindow::suggestFrontmatter);
+    tools->addAction(tr("As&k your notes"), QKeySequence(u"Ctrl+Shift+A"_s), this, [this] {
+        setPaneVisible(0, true);
+        leftTabs_->setCurrentWidget(ask_);
+        ask_->focusQuestion();
+    });
+    tools->addAction(tr("Update &semantic index"), this, [this] { assistant_->updateIndex(); });
+    tools->addAction(tr("AI &assistant settings…"), this, &MainWindow::showAiSettings);
+#endif
 
     QMenu* help = menuBar()->addMenu(tr("&Help"));
     help->addAction(tr("&About"), this, [this] {
@@ -382,6 +407,109 @@ void MainWindow::buildMenus()
     });
 }
 
+// --- assistant -------------------------------------------------------------------
+
+bool MainWindow::applyFrontmatter(const FrontmatterPatch& patch, QString* error)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (note_.path.isEmpty()) return fail(tr("No note is open."));
+    if (note_.readOnly || editor_->isReadOnly()) return fail(tr("This note is open read-only."));
+    const FrontmatterEdit e = planFrontmatterEdit(editor_->bufferText(), patch);
+    if (!e.ok) return fail(e.error);
+    if (!e.changed) return true;
+    QTextDocument* doc = editor_->document();
+    QTextCursor c(doc);
+    c.beginEditBlock();
+    QString text = e.text;
+    if (e.replaceLines > 0) {
+        const QTextBlock last = doc->findBlockByNumber(e.replaceLines - 1);
+        const QTextBlock next = last.next();
+        c.setPosition(0);
+        if (next.isValid()) {
+            c.setPosition(next.position(), QTextCursor::KeepAnchor);
+        } else { // the frontmatter is the whole note
+            c.setPosition(last.position() + last.length() - 1, QTextCursor::KeepAnchor);
+            if (text.endsWith(u'\n')) text.chop(1);
+        }
+    }
+    c.insertText(text);
+    c.endEditBlock();
+    return true;
+}
+
+#ifdef MN_HAVE_AI
+void MainWindow::buildAssistant()
+{
+    assistant_ = new ai::Assistant(vault_, this);
+    ask_ = new AiAskPanel(assistant_, leftTabs_);
+    leftTabs_->addTab(ask_, tr("Ask"));
+    connect(ask_, &AiAskPanel::openRequested, this,
+            [this](const QString& path, int line, const QString& find) { openNote(path, line, {}, find); });
+    search_->setSemanticSearch([this](const QString& q, auto cb) { assistant_->search(q, std::move(cb)); });
+    aiStatus_ = new QLabel(this);
+    statusBar()->addPermanentWidget(aiStatus_);
+    aiStatus_->hide();
+    connect(assistant_, &ai::Assistant::indexProgress, this, [this](int done, int total) {
+        aiStatus_->setVisible(done < total);
+        aiStatus_->setText(tr("Semantic index %1/%2").arg(done).arg(total));
+        aiStatus_->setToolTip(tr("Embedding passages for semantic search"));
+    });
+    connect(assistant_, &ai::Assistant::indexError, this, [this](const QString& message) {
+        aiStatus_->setText(tr("Semantic index paused"));
+        aiStatus_->setToolTip(message + u"\n\n"_s + tr("Tools › Update semantic index tries again."));
+        aiStatus_->show();
+    });
+    assistant_->setConfig(ai::AiConfig::load());
+}
+
+void MainWindow::showAiSettings()
+{
+    AiSettingsDialog dlg(assistant_->config(), this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    const ai::AiConfig c = dlg.config();
+    c.save();
+    assistant_->setConfig(c);
+}
+
+void MainWindow::suggestFrontmatter()
+{
+    if (note_.path.isEmpty()) return;
+    if (note_.readOnly) {
+        QMessageBox::information(this, tr("Suggest frontmatter"), tr("This note is open read-only."));
+        return;
+    }
+    if (!assistant_->config().chatReady()) {
+        showAiSettings();
+        if (!assistant_->config().chatReady()) return;
+    }
+    const QString path = note_.path;
+    statusBar()->showMessage(tr("Asking the model about %1…").arg(paths::linkName(path)));
+    assistant_->suggestFrontmatter(path, editor_->bufferText(),
+                                   [this, path](const ai::FrontmatterSuggestion& s) {
+                                       statusBar()->clearMessage();
+                                       if (path != note_.path) return; // another note was opened meanwhile
+                                       if (!s.error.isEmpty()) {
+                                           QMessageBox::warning(this, tr("Suggest frontmatter"), s.error);
+                                           return;
+                                       }
+                                       // Reviewed against the note as it is now (it may have been edited
+                                       // while waiting).
+                                       AiFrontmatterDialog dlg(editor_->bufferText(), s, this);
+                                       if (dlg.exec() != QDialog::Accepted || path != note_.path) return;
+                                       QString err;
+                                       if (!applyFrontmatter(dlg.patch(), &err))
+                                           QMessageBox::warning(this, tr("Suggest frontmatter"), err);
+                                   });
+}
+#else
+void MainWindow::buildAssistant() {}
+void MainWindow::suggestFrontmatter() {}
+void MainWindow::showAiSettings() {}
+#endif
+
 // --- vault ---------------------------------------------------------------------
 
 bool MainWindow::openVault(const QString& root, QString* error)
@@ -391,6 +519,9 @@ bool MainWindow::openVault(const QString& root, QString* error)
         return false;
     }
     closeNote();
+#ifdef MN_HAVE_AI
+    if (assistant_ != nullptr) assistant_->stopIndexing(); // late replies belong to the old vault
+#endif
     if (!vault_->open(root, error)) return false;
     history_.clear();
     historyIndex_ = -1;

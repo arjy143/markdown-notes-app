@@ -141,6 +141,48 @@ void VaultService::searchPassages(const QString& q, Callback<std::vector<Passage
     query<std::vector<Passage>>([q](IndexWorker* w) { return w->searchPassages(q, 200); }, std::move(cb));
 }
 
+void VaultService::setEmbeddingModel(const QString& model)
+{
+    if (worker_ == nullptr) return;
+    QMetaObject::invokeMethod(
+        worker_, [w = worker_, model] { w->setEmbeddingModel(model); }, Qt::QueuedConnection);
+}
+
+void VaultService::pendingEmbeddings(const QString& model, int limit, Callback<EmbeddingBatch> cb)
+{
+    query<EmbeddingBatch>([model, limit](IndexWorker* w) { return w->pendingEmbeddings(model, limit); },
+                          std::move(cb));
+}
+
+void VaultService::storeEmbeddings(const QString& model, std::vector<QByteArray> hashes,
+                                   std::vector<std::vector<float>> vectors, Callback<int> cb)
+{
+    query<int>([model, hashes = std::move(hashes), vectors = std::move(vectors)](
+                   IndexWorker* w) { return w->storeEmbeddings(model, hashes, vectors); },
+               std::move(cb));
+}
+
+void VaultService::pruneEmbeddings(Callback<int> cb)
+{
+    query<int>([](IndexWorker* w) { return w->pruneEmbeddings(); }, std::move(cb));
+}
+
+void VaultService::hybridPassages(const QString& q, std::vector<float> vector, const QString& model,
+                                  bool anyTerms, int limit, Callback<std::vector<Passage>> cb)
+{
+    query<std::vector<Passage>>(
+        [q, vector = std::move(vector), model, anyTerms, limit](IndexWorker* w) {
+            return w->hybridPassages(q, vector, model, anyTerms, limit);
+        },
+        std::move(cb));
+}
+
+void VaultService::exampleFrontmatter(const QString& path, Callback<QStringList> cb, int limit)
+{
+    query<QStringList>([path, limit](IndexWorker* w) { return w->exampleFrontmatter(path, limit); },
+                       std::move(cb));
+}
+
 void VaultService::relatedPassages(const QString& noteText, int line, const QString& path,
                                    Callback<std::vector<Passage>> cb, int limit)
 {

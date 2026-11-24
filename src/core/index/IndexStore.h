@@ -37,7 +37,8 @@ struct StoredLink {
 
 class IndexStore {
 public:
-    static constexpr int kSchemaVersion = 4;
+    static constexpr int kSchemaVersion = 5;
+    static constexpr int kEmbeddingsVersion = 2;
 
     static QString vaultId(const QString& vaultRoot);
     static QString defaultPath(const QString& vaultRoot);
@@ -98,6 +99,20 @@ public:
     std::vector<Passage> searchPassages(const QString& userQuery, int limit);
     // Passages matching any of the terms, best BM25 first, leaving out `excludePath`.
     std::vector<Passage> passagesMatchingAny(const QStringList& terms, const QString& excludePath, int limit);
+
+    // Semantic search. Vectors live in embeddings.sqlite next to the index (attached as
+    // "emb"), keyed by (passage hash, model): unit length, stored as a float scale plus
+    // one signed byte per dimension (a quarter of float32, plenty for ranking).
+    EmbeddingBatch pendingEmbeddings(const QString& model, int limit);
+    bool storeEmbeddings(const QString& model, const std::vector<QByteArray>& hashes,
+                         const std::vector<std::vector<float>>& vectors);
+    std::vector<float> embeddingFor(const QString& model, const QByteArray& hash);
+    int embeddingCount(const QString& model);
+    // Passages closest in meaning to `query` (cosine similarity in `score`), best first.
+    std::vector<Passage> semanticPassages(const QString& model, const std::vector<float>& query,
+                                          const QString& excludePath, int limit);
+    // Removes vectors of passages that no longer exist. Returns how many.
+    int pruneEmbeddings();
     QStringList ftsCandidates(const QString& phrase, int limit);
 
     // Builds an FTS5 MATCH expression from free text (prefix match on the last term).
@@ -105,6 +120,7 @@ public:
 
 private:
     bool createSchema(QString* error);
+    void attachEmbeddings(const QString& dbPath);
     void prepareStatements();
     qint64 idFor(const QString& path);
     // Fills in each passage's text (from the stored note bodies) and snippet.

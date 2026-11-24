@@ -14,6 +14,9 @@
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <type_traits>
 
@@ -53,8 +56,9 @@ CREATE INDEX tasks_file ON tasks(file_id);
 CREATE VIRTUAL TABLE fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE fts_vocab USING fts5vocab(fts, 'row');
 CREATE TABLE chunks(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, start_line INTEGER NOT NULL,
-                    end_line INTEGER NOT NULL, context TEXT NOT NULL);
+                    end_line INTEGER NOT NULL, context TEXT NOT NULL, hash BLOB NOT NULL);
 CREATE INDEX chunks_file ON chunks(file_id);
+CREATE INDEX chunks_hash ON chunks(hash);
 -- Passages. Contentless: the text is already in fts.body, sliced by line range when shown.
 CREATE VIRTUAL TABLE chunk_fts USING fts5(context, body, content = '', contentless_delete = 1,
                                           tokenize = 'unicode61 remove_diacritics 2');
@@ -235,6 +239,7 @@ bool IndexStore::open(const QString& dbPath, QString* error)
         if (s.step()) version = s.int32(0);
     }
     if (version == kSchemaVersion) {
+        attachEmbeddings(dbPath);
         prepareStatements();
         return true;
     }
@@ -250,8 +255,33 @@ bool IndexStore::open(const QString& dbPath, QString* error)
     db_.exec("PRAGMA temp_store=MEMORY");
     db_.exec("PRAGMA cache_size=-1024");
     if (!createSchema(error)) return false;
+    attachEmbeddings(dbPath);
     prepareStatements();
     return true;
+}
+
+void IndexStore::attachEmbeddings(const QString& dbPath)
+{
+    // A separate file: rebuilding the index keeps the vectors (they are keyed by content),
+    // and deleting it only costs re-embedding.
+    const QString path = QFileInfo(dbPath).absolutePath() + u"/embeddings.sqlite"_s;
+    sql::Statement attach = db_.prepare("ATTACH DATABASE ? AS emb");
+    attach.bind(1, path);
+    if (!attach.exec()) return;
+    int version = -1;
+    {
+        sql::Statement s = db_.prepare("PRAGMA emb.user_version");
+        if (s.step()) version = s.int32(0);
+    }
+    if (version != kEmbeddingsVersion) {
+        db_.exec("DROP TABLE IF EXISTS emb.vectors");
+        // A rowid table: rows of under 1 KB sit inline in the pages, so a search scans sequentially.
+        db_.exec("CREATE TABLE emb.vectors(id INTEGER PRIMARY KEY, hash BLOB NOT NULL, model TEXT NOT NULL, "
+                 "vec BLOB NOT NULL)");
+        db_.exec("CREATE UNIQUE INDEX emb.vectors_key ON vectors(hash, model)");
+        const QByteArray pragma = "PRAGMA emb.user_version=" + QByteArray::number(kEmbeddingsVersion);
+        db_.exec(pragma.constData());
+    }
 }
 
 void IndexStore::prepareStatements()
@@ -270,8 +300,8 @@ void IndexStore::prepareStatements()
     st_->updateStamp = db_.prepare("UPDATE files SET size = ?, mtime = ? WHERE path = ?");
     st_->insertTask = db_.prepare("INSERT INTO tasks(file_id, line, done, text, due) VALUES (?, ?, ?, ?, ?)");
     st_->docFreq = db_.prepare("SELECT doc FROM fts_vocab WHERE term = ?");
-    st_->insertChunk =
-        db_.prepare("INSERT INTO chunks(file_id, start_line, end_line, context) VALUES (?, ?, ?, ?)");
+    st_->insertChunk = db_.prepare(
+        "INSERT INTO chunks(file_id, start_line, end_line, context, hash) VALUES (?, ?, ?, ?, ?)");
     st_->insertChunkFts = db_.prepare("INSERT INTO chunk_fts(rowid, context, body) VALUES (?, ?, ?)");
     static const char* const deletes[] = {
         "DELETE FROM links WHERE file_id = ?",
@@ -420,6 +450,7 @@ bool IndexStore::putNote(const QString& path, qint64 size, qint64 mtimeMs, const
     sql::Statement& chunkFts = st_->insertChunkFts;
     for (const Chunk& c : chunks) {
         chunk.bind(1, id).bind(2, c.startLine).bind(3, c.endLine).bind(4, c.context);
+        chunk.bindBlob(5, passageHash(title, c.context, c.text));
         if (!chunk.exec()) continue;
         // The note's name counts as context, so a passage in "Sleep.md" matches "sleep".
         chunkFts.bind(1, db_.lastInsertId()).bind(2, title + u' ' + c.context).bind(3, c.text);
@@ -826,6 +857,206 @@ std::vector<Passage> IndexStore::passagesMatchingAny(const QStringList& terms, c
     }
     fillPassages(out, ids, terms, 240); // shown in the side panel
     return out;
+}
+
+namespace {
+
+std::vector<float> normalized(const std::vector<float>& v)
+{
+    double n = 0;
+    for (float x : v)
+        n += static_cast<double>(x) * x;
+    const double inv = n > 0 ? 1.0 / std::sqrt(n) : 0.0;
+    std::vector<float> out(v.size());
+    for (std::size_t i = 0; i < v.size(); ++i)
+        out[i] = static_cast<float>(v[i] * inv);
+    return out;
+}
+
+// A unit-length vector as a float scale followed by one int8 per dimension:
+// component i = byte[i] * scale / 127.
+QByteArray packVector(const std::vector<float>& v)
+{
+    const std::vector<float> u = normalized(v);
+    float scale = 0;
+    for (float x : u)
+        scale = std::max(scale, std::abs(x));
+    if (scale <= 0) scale = 1;
+    QByteArray out(static_cast<qsizetype>(sizeof(float) + u.size()), Qt::Uninitialized);
+    std::memcpy(out.data(), &scale, sizeof(float));
+    auto* q = reinterpret_cast<qint8*>(out.data() + sizeof(float));
+    for (std::size_t i = 0; i < u.size(); ++i)
+        q[i] = static_cast<qint8>(std::clamp(std::lround(u[i] / scale * 127.0f), -127L, 127L));
+    return out;
+}
+
+std::vector<float> unpackVector(const void* data, qsizetype bytes)
+{
+    if (bytes <= static_cast<qsizetype>(sizeof(float))) return {};
+    float scale = 0;
+    std::memcpy(&scale, data, sizeof(float));
+    const auto* q = static_cast<const qint8*>(data) + sizeof(float);
+    std::vector<float> v(static_cast<std::size_t>(bytes) - sizeof(float));
+    for (std::size_t i = 0; i < v.size(); ++i)
+        v[i] = static_cast<float>(q[i]) * scale / 127.0f;
+    return v;
+}
+
+} // namespace
+
+EmbeddingBatch IndexStore::pendingEmbeddings(const QString& model, int limit)
+{
+    EmbeddingBatch b;
+    {
+        sql::Statement s = db_.prepare("SELECT COUNT(DISTINCT hash) FROM chunks");
+        if (s.step()) b.total = s.int32(0);
+    }
+    {
+        sql::Statement s = db_.prepare("SELECT COUNT(*) FROM emb.vectors v WHERE v.model = ? AND EXISTS "
+                                       "(SELECT 1 FROM chunks c WHERE c.hash = v.hash)");
+        s.bind(1, model);
+        if (s.step()) b.done = s.int32(0);
+    }
+    sql::Statement s =
+        db_.prepare("SELECT c.hash, f.path, c.start_line, c.end_line, c.context, c.file_id FROM chunks c "
+                    "JOIN files f ON f.id = c.file_id "
+                    "WHERE NOT EXISTS (SELECT 1 FROM emb.vectors v WHERE v.hash = c.hash AND v.model = ?1) "
+                    "GROUP BY c.hash LIMIT ?2");
+    s.bind(1, model).bind(2, limit);
+    std::vector<Passage> passages;
+    std::vector<qint64> ids;
+    std::vector<QByteArray> hashes;
+    while (s.step()) {
+        Passage p;
+        p.path = s.text(1);
+        p.startLine = s.int32(2);
+        p.endLine = s.int32(3);
+        p.context = s.text(4);
+        passages.push_back(std::move(p));
+        ids.push_back(s.int64(5));
+        hashes.push_back(s.blob(0));
+    }
+    fillPassages(passages, ids, {}, 0);
+    for (std::size_t i = 0; i < passages.size(); ++i) {
+        const Passage& p = passages[i];
+        b.jobs.push_back({hashes[i], passageEmbeddingText(paths::linkName(p.path), p.context, p.text)});
+    }
+    return b;
+}
+
+bool IndexStore::storeEmbeddings(const QString& model, const std::vector<QByteArray>& hashes,
+                                 const std::vector<std::vector<float>>& vectors)
+{
+    if (hashes.size() != vectors.size()) return false;
+    db_.exec("BEGIN");
+    sql::Statement s = db_.prepare("INSERT OR REPLACE INTO emb.vectors(hash, model, vec) VALUES (?, ?, ?)");
+    bool ok = true;
+    for (std::size_t i = 0; i < hashes.size(); ++i) {
+        if (vectors[i].empty()) continue;
+        s.bindBlob(1, hashes[i]).bind(2, model).bindBlob(3, packVector(vectors[i]));
+        ok = s.exec() && ok;
+    }
+    db_.exec("COMMIT");
+    return ok;
+}
+
+std::vector<float> IndexStore::embeddingFor(const QString& model, const QByteArray& hash)
+{
+    sql::Statement s = db_.prepare("SELECT vec FROM emb.vectors WHERE hash = ? AND model = ?");
+    s.bindBlob(1, hash).bind(2, model);
+    if (!s.step()) return {};
+    const void* data = nullptr;
+    const qsizetype bytes = s.blobView(0, &data);
+    return unpackVector(data, bytes);
+}
+
+int IndexStore::embeddingCount(const QString& model)
+{
+    sql::Statement s = db_.prepare("SELECT COUNT(*) FROM emb.vectors WHERE model = ?");
+    s.bind(1, model);
+    return s.step() ? s.int32(0) : 0;
+}
+
+std::vector<Passage> IndexStore::semanticPassages(const QString& model, const std::vector<float>& queryIn,
+                                                  const QString& excludePath, int limit)
+{
+    std::vector<Passage> out;
+    if (queryIn.empty() || limit <= 0) return out;
+    // The query is quantised like the stored vectors: the scan is then integer dot
+    // products (four independent sums, so the adds don't wait on each other).
+    const QByteArray packed = packVector(queryIn);
+    float qScale = 0;
+    std::memcpy(&qScale, packed.constData(), sizeof(float));
+    const auto* q = reinterpret_cast<const qint8*>(packed.constData() + sizeof(float));
+    const std::size_t dim = queryIn.size();
+    // Brute force over every vector, read from disk: nothing stays in memory between searches.
+    using Hit = std::pair<float, QByteArray>;
+    std::vector<Hit> top;                                             // min-heap of the best
+    const std::size_t keep = static_cast<std::size_t>(limit) * 2 + 8; // room for excluded or stale ones
+    sql::Statement s = db_.prepare("SELECT hash, vec FROM emb.vectors WHERE model = ?");
+    s.bind(1, model);
+    auto worse = [](const Hit& a, const Hit& b) { return a.first > b.first; };
+    while (s.step()) {
+        const void* data = nullptr;
+        const qsizetype bytes = s.blobView(1, &data);
+        if (bytes != static_cast<qsizetype>(sizeof(float)) + static_cast<qsizetype>(dim))
+            continue; // another model's size
+        float scale = 0;
+        std::memcpy(&scale, data, sizeof(float));
+        const auto* v = static_cast<const qint8*>(data) + sizeof(float);
+        std::int32_t s0 = 0;
+        std::int32_t s1 = 0;
+        std::int32_t s2 = 0;
+        std::int32_t s3 = 0;
+        std::size_t i = 0;
+        for (; i + 4 <= dim; i += 4) {
+            s0 += q[i] * v[i];
+            s1 += q[i + 1] * v[i + 1];
+            s2 += q[i + 2] * v[i + 2];
+            s3 += q[i + 3] * v[i + 3];
+        }
+        for (; i < dim; ++i)
+            s0 += q[i] * v[i];
+        const float dot = static_cast<float>(s0 + s1 + s2 + s3) * (qScale / 127.0f) * (scale / 127.0f);
+        if (top.size() < keep) {
+            top.emplace_back(dot, s.blob(0));
+            std::push_heap(top.begin(), top.end(), worse);
+        } else if (dot > top.front().first) {
+            std::pop_heap(top.begin(), top.end(), worse);
+            top.back() = {dot, s.blob(0)};
+            std::push_heap(top.begin(), top.end(), worse);
+        }
+    }
+    std::sort(top.begin(), top.end(), [](const Hit& a, const Hit& b) { return a.first > b.first; });
+    sql::Statement c =
+        db_.prepare("SELECT c.file_id, f.path, c.start_line, c.end_line, c.context, f.mtime "
+                    "FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.hash = ? AND f.path <> ?");
+    std::vector<qint64> ids;
+    for (const Hit& h : top) {
+        c.bindBlob(1, h.second).bind(2, excludePath);
+        while (c.step() && static_cast<int>(out.size()) < limit) {
+            Passage p;
+            p.path = c.text(1);
+            p.startLine = c.int32(2);
+            p.endLine = c.int32(3);
+            p.context = c.text(4);
+            p.dateMs = passageDate(p.path, c.int64(5));
+            p.score = h.first;
+            out.push_back(std::move(p));
+            ids.push_back(c.int64(0));
+        }
+        c.reset();
+        if (static_cast<int>(out.size()) >= limit) break;
+    }
+    fillPassages(out, ids, {}, 480);
+    return out;
+}
+
+int IndexStore::pruneEmbeddings()
+{
+    db_.exec("DELETE FROM emb.vectors WHERE hash NOT IN (SELECT hash FROM chunks)");
+    sql::Statement s = db_.prepare("SELECT changes()");
+    return s.step() ? s.int32(0) : 0;
 }
 
 QStringList IndexStore::ftsCandidates(const QString& phrase, int limit)

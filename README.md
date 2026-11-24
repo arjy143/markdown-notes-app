@@ -29,6 +29,16 @@ Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows
 - **Quick capture:** `markdown-notes --capture` appends a line to `Inbox.md` (or today's daily note). Bind it to a global shortcut in your desktop settings.
 - **Appearance** (View): theme, accent colour, fonts, readable line length.
 
+## AI assistant (optional, local)
+
+Connect your own model server in **Tools › AI assistant settings**: any server with the OpenAI API (Ollama, LM Studio, llama.cpp's `llama-server`, vLLM). Set a chat model, an embedding model, or both; "Test connection" checks them. Notes' text goes only to that server, and the assistant never changes a note by itself.
+
+- **Suggest frontmatter and tags** (Ctrl+Shift+M): proposes category properties (from your vault settings), tags (preferring ones you already use) and a summary, in the style of similar notes. You review and edit them; Apply adds only what's missing, as one undoable edit.
+- **Ask** tab (Ctrl+Shift+A): questions answered from your notes, citing the passages used; click a citation to open it.
+- **Semantic search:** with an embedding model, passages are embedded once in the background (progress in the status bar), and Search gets a **Meaning** mode that finds passages by meaning as well as words. "Related to this paragraph" uses it too.
+
+With llama.cpp, which serves one model per server, put the embedding server's address in "Embedding server". Build with `-DMN_AI=OFF` to leave the assistant (and Qt Network) out.
+
 ## Keys
 
 | Key | Action |
@@ -39,6 +49,7 @@ Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows
 | Ctrl+N / F2 | New note / rename (updates links) |
 | Ctrl+F / Ctrl+H | Find / replace |
 | Ctrl+Shift+C | Quick capture |
+| Ctrl+Shift+M / A | Suggest frontmatter / ask your notes |
 | Ctrl+Shift+B / R | Toggle left / right panel |
 | Alt+Left / Right | Back / forward |
 | Ctrl+click | Follow link (creates missing notes) |

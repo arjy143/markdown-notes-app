@@ -5,6 +5,9 @@
 #include <QStyledItemDelegate>
 #include <QWidget>
 
+#include <functional>
+#include <vector>
+
 class QLineEdit;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -33,6 +36,11 @@ class SearchPanel : public QWidget {
 public:
     explicit SearchPanel(VaultService* vault, QWidget* parent = nullptr);
     void focusSearch(const QString& text = {});
+    // Adds a "Meaning" mode: passages found by keywords and by meaning (the assistant's
+    // semantic search). The callback's error, if any, is shown (keyword results still come).
+    using PassageSearch =
+        std::function<void(const QString& query, std::function<void(std::vector<Passage>, QString error)>)>;
+    void setSemanticSearch(PassageSearch search);
 
 Q_SIGNALS:
     void openRequested(const QString& path, int line, const QString& findText);
@@ -48,6 +56,7 @@ private:
     QLabel* status_;
     QTimer* debounce_;
     std::vector<Passage> passages_;
+    PassageSearch semantic_;
     int request_ = 0;
 };
 

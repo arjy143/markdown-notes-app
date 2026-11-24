@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QString>
 #include <QStringView>
 
@@ -39,6 +40,13 @@ struct ChunkOptions {
 
 // `firstLine`: the first line after the frontmatter (0 if there is none).
 std::vector<Chunk> chunkNote(QStringView text, int firstLine = 0, const ChunkOptions& options = {});
+
+// The text that stands for a passage when it is embedded (semantic search): the
+// note's name, the heading path and the passage, cut to a length embedding models take.
+QString passageEmbeddingText(const QString& title, const QString& context, const QString& text);
+// Identifies a passage's content (16 bytes of SHA-1 of passageEmbeddingText): vectors are
+// stored by it, so they survive renames, moves and edits elsewhere in the note.
+QByteArray passageHash(const QString& title, const QString& context, const QString& text);
 
 // The chunk containing `line`, or the nearest one before it; nullptr if there is none.
 const Chunk* chunkAtLine(const std::vector<Chunk>& chunks, int line);

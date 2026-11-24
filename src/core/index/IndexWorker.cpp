@@ -1,6 +1,8 @@
 #include "IndexWorker.h"
 
 #include "Similarity.h"
+#include "core/ai/Prompts.h"
+#include "core/parse/Frontmatter.h"
 #include "core/parse/NoteMetadata.h"
 #include "core/vault/Paths.h"
 #include "core/vault/TextFile.h"
@@ -550,6 +552,92 @@ double weightNorm(const QHash<QString, double>& w)
 }
 } // namespace
 
+namespace {
+
+QString passageKey(const Passage& p)
+{
+    return p.path + u':' + QString::number(p.startLine);
+}
+
+// Reciprocal rank fusion: each list adds 1 / (60 + rank). The first list's copy of a
+// passage is kept (keyword matches carry highlighted snippets).
+std::vector<Passage> fusePassages(std::vector<std::vector<Passage>> lists, int limit)
+{
+    QHash<QString, std::size_t> index;
+    std::vector<Passage> out;
+    for (std::vector<Passage>& list : lists) {
+        for (std::size_t r = 0; r < list.size(); ++r) {
+            const double add = 1.0 / (60.0 + static_cast<double>(r) + 1.0);
+            const QString key = passageKey(list[r]);
+            const auto it = index.constFind(key);
+            if (it != index.constEnd()) {
+                out[*it].score += add;
+                continue;
+            }
+            index.insert(key, out.size());
+            list[r].score = add;
+            out.push_back(std::move(list[r]));
+        }
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const Passage& a, const Passage& b) { return a.score > b.score; });
+    if (static_cast<int>(out.size()) > limit) out.resize(static_cast<std::size_t>(limit));
+    return out;
+}
+
+} // namespace
+
+int IndexWorker::storeEmbeddings(const QString& model, const std::vector<QByteArray>& hashes,
+                                 const std::vector<std::vector<float>>& vectors)
+{
+    store_.storeEmbeddings(model, hashes, vectors);
+    return store_.embeddingCount(model);
+}
+
+std::vector<Passage> IndexWorker::hybridPassages(const QString& query, const std::vector<float>& vector,
+                                                 const QString& model, bool anyTerms, int limit)
+{
+    constexpr int kEach = 100;
+    std::vector<std::vector<Passage>> lists;
+    const bool tagFilter = query.contains(u'#');
+    if (anyTerms) {
+        ensureStats();
+        // The question's distinctive words, rarest first (common words match everything).
+        QStringList terms = ai::questionTerms(query);
+        std::sort(terms.begin(), terms.end(), [this](const QString& a, const QString& b) {
+            return docFreq_.value(a) < docFreq_.value(b);
+        });
+        terms.removeIf([this](const QString& t) { return docFreq_.value(t) == 0; });
+        lists.push_back(store_.passagesMatchingAny(terms.mid(0, 12), QString(), kEach));
+    } else {
+        lists.push_back(store_.searchPassages(query, kEach));
+    }
+    if (!vector.empty() && !model.isEmpty() && !tagFilter)
+        lists.push_back(store_.semanticPassages(model, vector, QString(), kEach));
+    if (lists.size() == 1) {
+        std::vector<Passage> only = std::move(lists.front());
+        if (static_cast<int>(only.size()) > limit) only.resize(static_cast<std::size_t>(limit));
+        return only;
+    }
+    return fusePassages(std::move(lists), limit);
+}
+
+QStringList IndexWorker::exampleFrontmatter(const QString& path, int limit)
+{
+    QStringList out;
+    for (const RelatedNote& r : relatedNotes(path, 8)) {
+        const QByteArray body = store_.body(r.path).toUtf8();
+        const Frontmatter fm = parseFrontmatter(body);
+        if (!fm.present || !fm.valid || fm.fields.size() < 2) continue;
+        QStringList lines = QString::fromUtf8(body).split(u'\n').mid(1, fm.closingLine - 1);
+        for (QString& l : lines)
+            if (l.endsWith(u'\r')) l.chop(1);
+        out.append(lines.join(u'\n'));
+        if (out.size() >= limit) break;
+    }
+    return out;
+}
+
 std::vector<Passage> IndexWorker::relatedPassages(const QString& noteText, int line, const QString& path,
                                                   int limit)
 {
@@ -599,6 +687,20 @@ std::vector<Passage> IndexWorker::relatedPassages(const QString& noteText, int l
     }
     std::stable_sort(out.begin(), out.end(),
                      [](const Passage& a, const Passage& b) { return a.score > b.score; });
+    // With a semantic index: passages close in meaning too, even with no words in common.
+    if (!embeddingModel_.isEmpty()) {
+        const std::vector<float> v = store_.embeddingFor(
+            embeddingModel_, passageHash(paths::linkName(path), here->context, here->text));
+        std::vector<Passage> near = store_.semanticPassages(embeddingModel_, v, path, 20);
+        // Similarity scales differ between models: keep the ones close to the best match.
+        const double best = near.empty() ? 0 : near.front().score;
+        near.erase(std::remove_if(near.begin(), near.end(),
+                                  [best](const Passage& p) { return p.score < std::max(0.5, best - 0.15); }),
+                   near.end());
+        for (Passage& p : near)
+            p.reason = u"similar meaning"_s;
+        if (!near.empty()) out = fusePassages({std::move(out), std::move(near)}, 40);
+    }
     // At most two passages per note, so one long note doesn't fill the list.
     QHash<QString, int> perNote;
     std::vector<Passage> picked;

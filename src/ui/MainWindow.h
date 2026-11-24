@@ -26,7 +26,12 @@ namespace mn {
 class VaultService;
 struct RenamePlan;
 struct Move;
+struct FrontmatterPatch;
 } // namespace mn
+
+namespace mn::ai {
+class Assistant;
+}
 
 namespace mn::ui {
 
@@ -39,6 +44,7 @@ class SearchPanel;
 class BacklinksPanel;
 class TagPanel;
 class TasksPanel;
+class AiAskPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -132,6 +138,12 @@ public:
     bool paneVisible(int index) const;
     void resetLayout();
 
+    // The vault assistant (null when built without MN_AI).
+    ai::Assistant* assistant() const { return assistant_; }
+    // Adds reviewed frontmatter to the open note, in the editor as one undoable edit
+    // (saved like typing). Returns false, with a reason, if it can't.
+    bool applyFrontmatter(const FrontmatterPatch& patch, QString* error = nullptr);
+
 private:
     void chooseVault();
     void openRecentMenu();
@@ -160,6 +172,13 @@ private:
     std::function<void()> bannerAction_;
     QLabel* statusPath_ = nullptr;
     QLabel* statusInfo_ = nullptr;
+    // Assistant (MN_AI builds only).
+    void buildAssistant();
+    void suggestFrontmatter();
+    void showAiSettings();
+    ai::Assistant* assistant_ = nullptr;
+    AiAskPanel* ask_ = nullptr;
+    QLabel* aiStatus_ = nullptr;
     QTimer* autosave_ = nullptr;
     QTimer* passageTimer_ = nullptr; // related passages, once the cursor rests in a paragraph
     QFileSystemWatcher* noteWatcher_ = nullptr;

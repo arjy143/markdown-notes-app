@@ -150,7 +150,8 @@ SearchPanel::SearchPanel(VaultService* vault, QWidget* parent) : QWidget(parent)
     connect(edit_, &QLineEdit::returnPressed, this, &SearchPanel::run);
     connect(mode_, &QComboBox::currentIndexChanged, this, [this](int i) {
         QSettings().setValue(u"search/mode"_s, i);
-        sort_->setEnabled(i == 1);
+        sort_->setEnabled(i >= 1);
+        debounce_->setInterval(i == 2 ? 400 : 120); // meaning: one embedding request per pause
         run();
     });
     connect(sort_, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -164,6 +165,19 @@ SearchPanel::SearchPanel(VaultService* vault, QWidget* parent) : QWidget(parent)
     };
     connect(results_, &QTreeWidget::itemActivated, this, open);
     connect(results_, &QTreeWidget::itemClicked, this, open);
+}
+
+void SearchPanel::setSemanticSearch(PassageSearch search)
+{
+    semantic_ = std::move(search);
+    if (mode_->count() == 2) {
+        mode_->addItem(tr("Meaning"));
+        mode_->setItemData(2,
+                           tr("Passages that match by meaning as well as by words (semantic search with the "
+                              "AI assistant's embedding model)"),
+                           Qt::ToolTipRole);
+        if (QSettings().value(u"search/mode"_s, 0).toInt() == 2) mode_->setCurrentIndex(2);
+    }
 }
 
 void SearchPanel::focusSearch(const QString& text)
@@ -183,7 +197,18 @@ void SearchPanel::run()
         status_->clear();
         return;
     }
-    if (mode_->currentIndex() == 1) {
+    if (mode_->currentIndex() == 2 && semantic_) {
+        status_->setText(tr("Searching…"));
+        semantic_(q, [this, req](std::vector<Passage> hits, const QString& error) {
+            if (req != request_) return;
+            passages_ = std::move(hits);
+            showPassages();
+            if (!error.isEmpty())
+                status_->setText(status_->text() + u" · "_s + tr("words only: %1").arg(error));
+        });
+        return;
+    }
+    if (mode_->currentIndex() >= 1) {
         vault_->searchPassages(q, [this, req](std::vector<Passage> hits) {
             if (req != request_) return;
             passages_ = std::move(hits);
@@ -212,7 +237,7 @@ void SearchPanel::run()
 
 void SearchPanel::showPassages()
 {
-    if (mode_->currentIndex() != 1) return;
+    if (mode_->currentIndex() < 1) return;
     results_->clear();
     std::vector<const Passage*> order;
     order.reserve(passages_.size());

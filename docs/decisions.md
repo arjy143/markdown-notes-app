@@ -250,3 +250,27 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
   - Plurals are folded ("jobs" = "job"), and at least two distinctive shared words are required: single shared words gave false matches such as Jenkins "jobs" for job applications.
   - At most two passages per note, five in all.
 - **Cost:** about 6 passages per note on the 5k benchmark vault and 10 on the user's. The chunker was rewritten to hash words into sorted integer vectors (no allocation per word): 1.3 s down to 0.43 s single-threaded for 5k notes, run on the parallel parse threads. The extra FTS inserts add about 0.5 s (about a third) to a first-time index of the 5k vault. Passage search is about 2–3× the cost of note search, still inside the search budget. Nothing new is held in memory at idle. An FTS5 `hashsize` increase was tried and made no measurable difference.
+
+## 2026-11-24 — A local-model assistant (MN_AI)
+
+- **Scope, kept small on purpose:** suggest frontmatter and tags for the open note; ask questions answered from the notes; semantic (meaning) search over passages, also used by "Related to this paragraph". No autonomous actions and no bulk edits.
+- **Safety:** the assistant never writes a note. A suggestion opens a review dialog where every value can be edited or cleared, and a preview shows the exact frontmatter result.
+  - Apply goes into the editor as one undoable edit and is saved like typing. It only adds missing keys and tags, never changes existing values, and leaves unreadable frontmatter alone.
+  - The edit is planned against the buffer at apply time, in case the note changed while the model was thinking.
+  - New tags are added in the note's existing style (block list, flow list or string), and every line keeps its own line ending.
+- **Protocol:** OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings`, non-streaming. This covers Ollama, LM Studio, llama.cpp and vLLM. `<think>` blocks are stripped, and JSON is pulled out of prose or code fences. An optional separate embedding server covers llama.cpp's one-model-per-server setup.
+- **Settings** are app-wide `QSettings`, because the server belongs to the machine, not the vault. The API key is stored there in plain text; it is optional and usually unused for local servers.
+- **Build:** QtNetwork lives in `mn_ai`, behind the `MN_AI` option (on by default), as CLAUDE.md reserved it. `QNetworkAccessManager` is created only on first use.
+- **Vectors:**
+  - Stored unit-length in `embeddings.sqlite` next to the index, keyed by (passage hash, model). They survive index rebuilds, renames and moves. Index schema v5 adds `chunks.hash`.
+  - Each vector is stored as a float scale plus one int8 per dimension, in a rowid table. This replaced float32 in a WITHOUT ROWID table: 3 KB rows spilled onto overflow pages.
+  - On the 5k benchmark vault (20,528 passages, 768 dimensions), the file went from 96 MB to 18 MB, and hybrid search from 91 ms to 41 ms median (51 ms max). About 20 ms of that is the keyword half.
+  - The query is quantised too, so the scan is integer dot products with four independent sums. int8 is plenty for ranking.
+  - Embedding runs in batches of 16 after each index update. A server error pauses it with a status-bar message.
+  - Searches scan the vectors from disk, so idle memory is unchanged: about 107 MB with or without `MN_AI`, measured back to back.
+- **Hybrid ranking:** FTS5 passage hits and vector hits are merged by reciprocal rank fusion (k = 60).
+  - Questions use any-word keyword matching on their rarest words; searches use all words.
+  - `#tag` queries stay keyword-only.
+  - In related passages, semantic hits must be within 0.15 of the best match, and at least 0.5, since similarity scales differ between models.
+- **Frontmatter prompt:** includes the vault's categories (tag properties and category tags), the 150 most used tags, and the frontmatter of up to 3 similar notes as style examples. Replies are checked: categories must be known and are used once each, tags are cleaned and given the vault's existing spelling.
+- **Tested** against a fake OpenAI-compatible server (`tests/FakeAiServer.h`) whose embeddings put synonyms on the same dimension. This shows semantic search finding the sleep passages for "insomnia", a word in no note, and checks that the vault's bytes never change.

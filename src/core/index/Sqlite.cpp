@@ -104,6 +104,12 @@ double Statement::real(int col) const
     return sqlite3_column_double(stmt_, col);
 }
 
+qsizetype Statement::blobView(int col, const void** data) const
+{
+    *data = sqlite3_column_blob(stmt_, col);
+    return sqlite3_column_bytes(stmt_, col);
+}
+
 QByteArray Statement::blob(int col) const
 {
     const void* p = sqlite3_column_blob(stmt_, col);
