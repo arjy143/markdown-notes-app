@@ -12,6 +12,7 @@
 #include "QuickSwitcher.h"
 #include "ReadingView.h"
 #include "SettingsDialog.h"
+#include "TagPicker.h"
 #include "TasksPanel.h"
 #include "core/ai/FrontmatterMerge.h"
 #ifdef MN_HAVE_AI
@@ -335,6 +336,7 @@ void MainWindow::buildMenus()
         findBar_->showFind(true);
     });
     edit->addAction(tr("Insert &template…"), QKeySequence(u"Alt+T"_s), this, &MainWindow::insertTemplate);
+    edit->addAction(tr("T&ags…"), QKeySequence(u"Ctrl+T"_s), this, &MainWindow::editTags);
     QAction* suggest = edit->addAction(tr("Suggest &links while typing"));
     suggest->setCheckable(true);
     suggest->setChecked(editor_->linkSuggestions());
@@ -402,7 +404,7 @@ void MainWindow::buildMenus()
 
 // --- assistant -------------------------------------------------------------------
 
-bool MainWindow::applyFrontmatter(const FrontmatterPatch& patch, QString* error)
+bool MainWindow::applyFrontmatter(const FrontmatterPatch& patch, QString* error, QStringList* skipped)
 {
     auto fail = [error](const QString& why) {
         if (error) *error = why;
@@ -412,6 +414,7 @@ bool MainWindow::applyFrontmatter(const FrontmatterPatch& patch, QString* error)
     if (note_.readOnly || editor_->isReadOnly()) return fail(tr("This note is open read-only."));
     const FrontmatterEdit e = planFrontmatterEdit(editor_->bufferText(), patch);
     if (!e.ok) return fail(e.error);
+    if (skipped) *skipped = e.skipped;
     if (!e.changed) return true;
     QTextDocument* doc = editor_->document();
     QTextCursor c(doc);
@@ -940,21 +943,18 @@ void MainWindow::newNote()
 void MainWindow::newNoteIn(const QString& folder)
 {
     if (!vault_->isOpen()) return;
+    const VaultSettings& st = vault_->settings();
     const QString path = paths::uniqueVaultPath(vault_->root(), folder, u"Untitled"_s, u".md"_s);
     if (path.isEmpty()) return;
-    QString name = paths::linkName(path);
-    QByteArray content;
-    const VaultSettings& st = vault_->settings();
-    if (!st.tagProperties.isEmpty() && !st.categoryTags.isEmpty()) {
-        NewNoteDialog dlg(name, st.tagProperties, st.categoryTags, this);
-        if (dlg.exec() != QDialog::Accepted) return;
-        name = dlg.name();
-        content = dlg.content();
-        const QString target = paths::join(folder, QString(name + u".md"_s));
-        if (vault_->files().find(target) >= 0 || QFileInfo::exists(vault_->absolutePath(target))) {
-            QMessageBox::information(this, tr("New note"), tr("“%1” already exists.").arg(target));
-            return;
-        }
+    NewNoteDialog dlg(paths::linkName(path), st.tagProperties, st.categoryTags, vault_->snapshot().tags,
+                      this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    const QString name = dlg.name();
+    const QByteArray content = dlg.content();
+    const QString target = paths::join(folder, QString(name + u".md"_s));
+    if (vault_->files().find(target) >= 0 || QFileInfo::exists(vault_->absolutePath(target))) {
+        QMessageBox::information(this, tr("New note"), tr("“%1” already exists.").arg(target));
+        return;
     }
     const QString created = createNote(folder, name, content);
     if (!created.isEmpty()) openNote(created);
@@ -1370,6 +1370,37 @@ void MainWindow::openToday()
     editor_->moveCursor(QTextCursor::End);
     if (readingMode()) setReadingMode(false);
     editor_->setFocus();
+}
+
+void MainWindow::editTags()
+{
+    if (note_.path.isEmpty()) return;
+    if (note_.readOnly || editor_->isReadOnly()) {
+        statusBar()->showMessage(tr("This note is open read-only."), 5000);
+        return;
+    }
+    const Frontmatter fm = parseFrontmatter(editor_->bufferText().toUtf8());
+    if (fm.present && !fm.valid) {
+        QMessageBox::warning(this, tr("Tags"),
+                             tr("This note's frontmatter can't be read (%1).").arg(fm.error));
+        return;
+    }
+    NoteTagsDialog dlg(paths::linkName(note_.path), fm.tags, vault_->snapshot().tags, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    FrontmatterPatch patch;
+    patch.addTags = dlg.added();
+    patch.removeTags = dlg.removed();
+    if (patch.addTags.isEmpty() && patch.removeTags.isEmpty()) return;
+    QString err;
+    QStringList skipped;
+    if (!applyFrontmatter(patch, &err, &skipped)) {
+        QMessageBox::warning(this, tr("Tags"), err);
+        return;
+    }
+    if (!skipped.isEmpty())
+        QMessageBox::warning(
+            this, tr("Tags"),
+            tr("The tags are written in a form that can't be changed here: %1").arg(skipped.join(u"; "_s)));
 }
 
 void MainWindow::quickCapture()

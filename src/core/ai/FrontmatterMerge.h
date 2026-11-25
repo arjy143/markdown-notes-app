@@ -5,15 +5,16 @@
 #include <QString>
 #include <QStringList>
 
-// Adds properties and tags to a note's frontmatter without touching anything
-// else: existing values are never changed or reformatted, the body is never
-// touched, and a frontmatter block that doesn't parse is left alone. Used to
+// Adds properties and tags to a note's frontmatter, or removes tags, without
+// touching anything else: other values are never changed or reformatted, the
+// body is never touched, and a frontmatter block that doesn't parse is left alone. Used to
 // apply the assistant's suggestions to the open note (in the editor, as one
 // undoable edit).
 namespace mn {
 
 struct FrontmatterPatch {
     QStringList addTags;                         // added to `tags` if not already there (any case)
+    QStringList removeTags;                      // removed from `tags` (any case, with or without '#')
     QList<QPair<QString, QString>> addIfMissing; // key, scalar value; skipped if the key exists
 };
 
@@ -36,6 +37,10 @@ QString applyFrontmatterEdit(QStringView noteText, const FrontmatterEdit& edit);
 // A tag as Obsidian accepts it (letters, digits, _ - /, not only digits), or empty.
 // "#Machine Learning" -> "Machine-Learning".
 QString cleanTag(QStringView tag);
+
+// Key under which tags that are probably the same compare equal: case, '-', '_',
+// spaces and a plural 's' ignored ("Machine-Learning" ~ "machine_learnings").
+QString tagLookAlikeKey(QStringView tag);
 
 // A YAML scalar: plain when that's unambiguous, otherwise double-quoted.
 QString yamlScalar(const QString& value);

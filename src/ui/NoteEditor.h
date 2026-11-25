@@ -45,6 +45,7 @@ public:
     void setAttachmentHandler(AttachmentHandler h) { attachmentHandler_ = std::move(h); }
 
     void refreshCompletionSources();
+    QCompleter* completer() const { return completer_; } // the [[ / # / tags: completion list
     // Underlines mentions of note names in the current paragraph; Alt+Enter links one.
     void setLinkSuggestions(bool on);
     bool linkSuggestions() const { return suggestLinks_; }

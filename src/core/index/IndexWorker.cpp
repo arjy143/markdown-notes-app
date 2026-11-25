@@ -1,6 +1,7 @@
 #include "IndexWorker.h"
 
 #include "Similarity.h"
+#include "core/ai/FrontmatterMerge.h"
 #include "core/ai/Prompts.h"
 #include "core/parse/Frontmatter.h"
 #include "core/parse/NoteMetadata.h"
@@ -841,12 +842,7 @@ HealthReport IndexWorker::healthReport(const QString& skipFolder, const QStringL
     // Tags that are probably the same: equal after ignoring case, '-', '_' and a plural 's'.
     QHash<QString, TagGroup> groups;
     for (const TagCount& t : store_.tagCounts()) {
-        QString key;
-        for (QChar c : t.tag.toCaseFolded()) {
-            if (c != u'-' && c != u'_' && c != u' ') key += c;
-        }
-        if (key.size() > 3 && key.endsWith(u's')) key.chop(1);
-        TagGroup& g = groups[key];
+        TagGroup& g = groups[tagLookAlikeKey(t.tag)];
         g.tags.append(t.tag);
         g.notes.append(t.notes);
     }

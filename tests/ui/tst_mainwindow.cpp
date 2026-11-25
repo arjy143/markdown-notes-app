@@ -14,13 +14,16 @@
 #include "ui/Panels.h"
 #include "ui/QuickSwitcher.h"
 #include "ui/ReadingView.h"
+#include "ui/TagPicker.h"
 #include "ui/Theme.h"
 
+#include <QAbstractItemView>
 #include <QAbstractTextDocumentLayout>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCompleter>
 #include <QFontDatabase>
 #include <QLineEdit>
 #include <QMimeData>
@@ -776,6 +779,106 @@ private Q_SLOTS:
         QTimer::singleShot(0, &w, [] { QApplication::activeModalWidget()->close(); });
         action->trigger();
         QCOMPARE(static_cast<int>(test::snapshotTree(v.root()).size()), before);
+    }
+
+    void tagsDialogEditsTheFrontmatter()
+    {
+        test::VaultCopy v(u"ui-vault"_s);
+        QVERIFY(
+            test::writeBytes(v.path(u"Tagged.md"_s), "---\ntitle: T\ntags:\n  - old\n  - keep\n---\nBody\n"));
+        MainWindow w;
+        QVERIFY(w.openVault(v.root()));
+        QVERIFY(waitIndexed(w));
+        QVERIFY(w.openNote(u"Tagged.md"_s));
+        bool seen = false;
+        QTimer::singleShot(0, &w, [&] {
+            auto* dlg = qobject_cast<NoteTagsDialog*>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            QCOMPARE(dlg->picker()->tags(), (QStringList{u"old"_s, u"keep"_s}));
+            dlg->picker()->removeTag(u"old"_s);
+            QTest::keyClicks(dlg->picker()->searchBox(), u"hom"_s); // "home", from Home.md
+            QTest::keyClick(dlg->picker()->searchBox(), Qt::Key_Return);
+            seen = true;
+            QTest::keyClick(dlg->picker()->searchBox(), Qt::Key_Return); // empty search: done
+        });
+        w.editTags();
+        QVERIFY(seen);
+        QCOMPARE(w.editor()->bufferText(), u"---\ntitle: T\ntags:\n  - keep\n  - home\n---\nBody\n"_s);
+        // One undo step restores it.
+        w.editor()->undo();
+        QCOMPARE(w.editor()->bufferText(), u"---\ntitle: T\ntags:\n  - old\n  - keep\n---\nBody\n"_s);
+
+        // A note without frontmatter gets one.
+        QVERIFY(w.openNote(u"Second.md"_s));
+        QTimer::singleShot(0, &w, [] {
+            auto* dlg = qobject_cast<NoteTagsDialog*>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            dlg->picker()->addTag(u"draft"_s);
+            dlg->accept();
+        });
+        w.editTags();
+        QVERIFY(w.editor()->bufferText().startsWith(u"---\ntags:\n  - draft\n---\n# Second\n"_s));
+    }
+
+    void tagsAutocompleteInTheFrontmatter()
+    {
+        test::VaultCopy v(u"ui-vault"_s);
+        QVERIFY(test::writeBytes(v.path(u"Fm.md"_s), "---\ntags:\n  - x\n---\nBody\n"));
+        MainWindow w;
+        w.show();
+        QVERIFY(w.openVault(v.root()));
+        QVERIFY(waitIndexed(w));
+        QVERIFY(w.openNote(u"Fm.md"_s));
+        NoteEditor* ed = w.editor();
+        auto typeAt = [ed](int line, const QString& text) {
+            QTextCursor c(ed->document()->findBlockByNumber(line));
+            c.movePosition(QTextCursor::EndOfBlock);
+            ed->setTextCursor(c);
+            QTest::keyClicks(ed, text);
+        };
+        auto popupShows = [ed](const QString& item) {
+            return ed->completer()->popup()->isVisible() && ed->completer()->currentCompletion() == item;
+        };
+        typeAt(2, QString());
+        QTest::keyClick(ed, Qt::Key_Return); // continues the list: "  - "
+        QTest::keyClicks(ed, u"ho"_s);       // a block-list item under tags:
+        QVERIFY(popupShows(u"home"_s));
+        QTest::keyClick(ed->completer()->popup(), Qt::Key_Return);
+        QCOMPARE(ed->document()->findBlockByNumber(3).text(), u"  - home"_s);
+        // Flow lists and plain strings on the key's line.
+        QVERIFY(ed->setBuffer(u"---\ntags: [a, \ntitle: x\n---\nBody ho\n"_s));
+        typeAt(1, u"ho"_s);
+        QVERIFY(popupShows(u"home"_s));
+        ed->completer()->popup()->hide();
+        // Not for other properties, and not in the body without '#'.
+        typeAt(2, u" ho"_s);
+        QVERIFY(!ed->completer()->popup()->isVisible());
+        typeAt(4, u"m"_s);
+        QVERIFY(!ed->completer()->popup()->isVisible());
+    }
+
+    void newNoteOffersTags()
+    {
+        test::VaultCopy v(u"ui-vault"_s);
+        MainWindow w;
+        QVERIFY(w.openVault(v.root()));
+        QVERIFY(waitIndexed(w));
+        QTimer::singleShot(0, &w, [] {
+            auto* dlg = qobject_cast<NewNoteDialog*>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            dlg->findChild<QLineEdit*>()->setText(u"Plan"_s);
+            QTest::keyClicks(dlg->tagPicker()->searchBox(), u"home"_s);
+            QTest::keyClick(dlg->tagPicker()->searchBox(), Qt::Key_Return);
+            QTest::keyClicks(dlg->tagPicker()->searchBox(), u"new idea"_s);
+            QTest::keyClick(dlg->tagPicker()->searchBox(), Qt::Key_Return);
+            QTest::keyClick(dlg->tagPicker()->searchBox(), Qt::Key_Return); // done: creates the note
+        });
+        for (QAction* a : w.findChildren<QAction*>()) {
+            if (a->text() == u"&New note"_s) a->trigger();
+        }
+        QCOMPARE(w.currentPath(), u"Plan.md"_s);
+        QCOMPARE(test::readBytes(v.path(u"Plan.md"_s)),
+                 QByteArray("---\ntags:\n  - home\n  - new-idea\n---\n"));
     }
 
     void headingsUseTheNormalTextColour()

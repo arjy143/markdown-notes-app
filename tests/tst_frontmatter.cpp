@@ -1,4 +1,5 @@
 #include "TestUtil.h"
+#include "core/ai/FrontmatterMerge.h"
 #include "core/parse/Frontmatter.h"
 
 using namespace mn;
@@ -47,6 +48,69 @@ private Q_SLOTS:
         QVERIFY(!fm.valid);
         QVERIFY(!fm.error.isEmpty());
         QVERIFY(fm.tags.isEmpty());
+    }
+
+    void tagsAreRemovedInTheExistingStyle_data()
+    {
+        QTest::addColumn<QString>("before");
+        QTest::addColumn<QString>("after");
+        QTest::newRow("block list") << u"---\ntags:\n  - a\n  - Old\n  - b\nx: 1\n---\nBody\n"_s
+                                    << u"---\ntags:\n  - a\n  - b\nx: 1\n---\nBody\n"_s;
+        QTest::newRow("block list, quoted and #")
+            << u"---\ntags:\n- \"#old\"\n- a\n---\n"_s << u"---\ntags:\n- a\n---\n"_s;
+        QTest::newRow("last item") << u"---\ntags:\n  - old\ntitle: t\n---\n"_s
+                                   << u"---\ntags:\ntitle: t\n---\n"_s;
+        QTest::newRow("flow list") << u"---\ntags: [a, old, 'b']\n---\n"_s << u"---\ntags: [a, 'b']\n---\n"_s;
+        QTest::newRow("flow list, only item") << u"---\ntags: [old]\n---\n"_s << u"---\ntags: []\n---\n"_s;
+        QTest::newRow("comma string") << u"---\ntags: a, old, b\n---\n"_s << u"---\ntags: a, b\n---\n"_s;
+        QTest::newRow("space string") << u"---\ntags: old a\n---\n"_s << u"---\ntags: a\n---\n"_s;
+        QTest::newRow("string, only tag") << u"---\ntags: old\n---\n"_s << u"---\ntags:\n---\n"_s;
+        QTest::newRow("not there") << u"---\ntags: [a]\n---\n"_s << u"---\ntags: [a]\n---\n"_s;
+        QTest::newRow("no frontmatter") << u"Body\n"_s << u"Body\n"_s;
+        QTest::newRow("windows line endings") << u"---\r\ntags:\r\n  - old\r\n  - a\r\n---\r\nBody\r\n"_s
+                                              << u"---\r\ntags:\r\n  - a\r\n---\r\nBody\r\n"_s;
+    }
+    void tagsAreRemovedInTheExistingStyle()
+    {
+        QFETCH(QString, before);
+        QFETCH(QString, after);
+        FrontmatterPatch p;
+        p.removeTags = {u"OLD"_s};
+        const FrontmatterEdit e = planFrontmatterEdit(before, p);
+        QVERIFY2(e.ok, qPrintable(e.error));
+        QCOMPARE(applyFrontmatterEdit(before, e), after);
+        QVERIFY(parseFrontmatter(after.toUtf8()).valid);
+        QVERIFY(!parseFrontmatter(after.toUtf8()).tags.contains(u"old"_s, Qt::CaseInsensitive));
+    }
+
+    void tagsAreAddedAndRemovedInOneEdit()
+    {
+        const QString note = u"---\ntitle: x\ntags:\n  - old\n  - keep\n---\nBody\n"_s;
+        FrontmatterPatch p;
+        p.removeTags = {u"old"_s};
+        p.addTags = {u"new"_s};
+        const FrontmatterEdit e = planFrontmatterEdit(note, p);
+        QVERIFY(e.ok && e.changed);
+        QCOMPARE(e.replaceLines, 6);
+        QCOMPARE(applyFrontmatterEdit(note, e), u"---\ntitle: x\ntags:\n  - keep\n  - new\n---\nBody\n"_s);
+        // Removing every block item, then adding: still a block list.
+        p.removeTags = {u"old"_s, u"keep"_s};
+        QCOMPARE(applyFrontmatterEdit(note, planFrontmatterEdit(note, p)),
+                 u"---\ntitle: x\ntags:\n  - new\n---\nBody\n"_s);
+        // A nested value can't be edited: reported, not guessed.
+        const QString nested = u"---\ntags:\n  key: value\n---\n"_s;
+        p = {};
+        p.removeTags = {u"value"_s};
+        const FrontmatterEdit n = planFrontmatterEdit(nested, p);
+        QVERIFY(n.ok && !n.changed);
+    }
+
+    void lookAlikeTags()
+    {
+        QCOMPARE(tagLookAlikeKey(u"#Machine-Learning"), tagLookAlikeKey(u"machine_learnings"));
+        QCOMPARE(tagLookAlikeKey(u"Project"), tagLookAlikeKey(u"projects"));
+        QVERIFY(tagLookAlikeKey(u"gas") != tagLookAlikeKey(u"ga"));
+        QVERIFY(tagLookAlikeKey(u"rust") != tagLookAlikeKey(u"trust"));
     }
 
     void notFrontmatter()

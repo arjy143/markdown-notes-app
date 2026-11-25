@@ -478,6 +478,51 @@ void NoteEditor::keyPressEvent(QKeyEvent* e)
 
 // --- completion ---------------------------------------------------------------
 
+namespace {
+
+// Where the tag being typed starts, when the cursor (column `col` of `block`) is
+// in the value of the frontmatter's tags property: "tags: [a, b|", "tags: a b|"
+// or a "  - b|" item under "tags:". -1 elsewhere.
+int frontmatterTagStart(const QTextBlock& block, int col)
+{
+    constexpr int kMaxFrontmatterLines = 200;
+    const int number = block.blockNumber();
+    if (number < 1 || number > kMaxFrontmatterLines) return -1;
+    const QTextDocument* doc = block.document();
+    if (doc->firstBlock().text().trimmed() != u"---"_s) return -1;
+    for (QTextBlock b = doc->firstBlock().next(); b.isValid() && b != block; b = b.next()) {
+        const QString t = b.text().trimmed();
+        if (t == u"---"_s || t == u"..."_s) return -1; // the frontmatter ended above
+    }
+    // The property this line belongs to: the nearest unindented "key:" at or above it.
+    QString key;
+    int keyEnd = -1; // column after the colon, when the key is on this line
+    for (QTextBlock b = block; b.isValid() && b.blockNumber() >= 1; b = b.previous()) {
+        const QString t = b.text();
+        if (t.isEmpty() || t[0].isSpace() || t.startsWith(u'-') || t.startsWith(u'#')) continue;
+        const qsizetype colon = t.indexOf(u':');
+        if (colon <= 0) return -1;
+        key = t.left(colon).trimmed();
+        if (b == block) keyEnd = static_cast<int>(colon) + 1;
+        break;
+    }
+    if (key.compare(u"tags"_s, Qt::CaseInsensitive) != 0 && key.compare(u"tag"_s, Qt::CaseInsensitive) != 0)
+        return -1;
+    const QString line = block.text();
+    if (col < keyEnd) return -1;
+    int s = col;
+    while (s > 0 && line[s - 1] != u'#' && md::isTagCodePoint(line[s - 1].unicode()))
+        --s;
+    const QChar before = s > 0 ? line[s - 1] : QChar(u' ');
+    if (!(before.isSpace() || before == u'[' || before == u',' || before == u':' || before == u'"' ||
+          before == u'\''))
+        return -1;
+    if (keyEnd < 0 && !line.trimmed().startsWith(u'-')) return -1; // under the key, only list items
+    return s;
+}
+
+} // namespace
+
 void NoteEditor::updateCompletion()
 {
     const QTextCursor c = textCursor();
@@ -556,6 +601,20 @@ void NoteEditor::updateCompletion()
             });
         }
         return;
+    }
+
+    // Tag in the frontmatter's tags property (no '#' there).
+    if (vault_ != nullptr) {
+        const int start = frontmatterTagStart(c.block(), col);
+        if (start >= 0 && start < col) {
+            mode_ = Mode::Tag;
+            anchor_ = blockPos + start;
+            QStringList tags;
+            for (const TagCount& t : vault_->snapshot().tags)
+                tags.append(t.tag);
+            showCompletion(tags, line.mid(start, col - start));
+            return;
+        }
     }
 
     // Tag: '#' at a boundary followed by tag characters up to the cursor.

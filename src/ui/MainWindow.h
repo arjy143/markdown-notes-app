@@ -111,8 +111,8 @@ private:
     void followLink(const QString& target, const QString& sourcePath);
     QString createNote(const QString& folder, const QString& baseName, const QByteArray& content = {});
     void newNote();
-    // A new note in `folder`. With category properties in the vault settings, asks for
-    // the name and the categories first (they become the note's frontmatter).
+    // A new note in `folder`: asks for the name and tags first (and the categories,
+    // when the vault settings have category properties); they become its frontmatter.
     void newNoteIn(const QString& folder);
     void newFolder(const QString& parentFolder);
     void deletePath(const QString& path, bool folder);
@@ -134,6 +134,8 @@ public:
     void quickCapture();
     // Opens today's daily note, creating it (with the daily-note tags) first.
     void openToday();
+    // Ctrl+T: pick the open note's tags; applied to its frontmatter as one undoable edit.
+    void editTags();
     // Ticks off or deletes a task in its note (from the Tasks view). `confirmDelete`
     // asks first; tests pass false.
     bool editTask(const mn::TaskInfo& task, mn::TaskAction action, bool confirmDelete = true);
@@ -147,7 +149,8 @@ public:
     ai::Assistant* assistant() const { return assistant_; }
     // Adds reviewed frontmatter to the open note, in the editor as one undoable edit
     // (saved like typing). Returns false, with a reason, if it can't.
-    bool applyFrontmatter(const FrontmatterPatch& patch, QString* error = nullptr);
+    bool applyFrontmatter(const FrontmatterPatch& patch, QString* error = nullptr,
+                          QStringList* skipped = nullptr);
 
 private:
     void chooseVault();

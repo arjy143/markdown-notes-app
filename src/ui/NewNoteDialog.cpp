@@ -1,5 +1,6 @@
 #include "NewNoteDialog.h"
 
+#include "TagPicker.h"
 #include "core/ai/FrontmatterMerge.h"
 
 #include <QComboBox>
@@ -14,7 +15,8 @@ using namespace Qt::StringLiterals;
 namespace mn::ui {
 
 NewNoteDialog::NewNoteDialog(const QString& suggestedName, const QStringList& properties,
-                             const QStringList& categories, QWidget* parent)
+                             const QStringList& categories, const std::vector<TagCount>& vaultTags,
+                             QWidget* parent)
     : QDialog(parent), properties_(properties)
 {
     setWindowTitle(tr("New note"));
@@ -41,6 +43,9 @@ NewNoteDialog::NewNoteDialog(const QString& suggestedName, const QStringList& pr
         });
     }
     lay->addLayout(form);
+    tags_ = new TagPicker(this);
+    tags_->setVaultTags(vaultTags);
+    lay->addWidget(tags_, 1);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttons->button(QDialogButtonBox::Ok)->setText(tr("Create"));
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -49,6 +54,11 @@ NewNoteDialog::NewNoteDialog(const QString& suggestedName, const QStringList& pr
     auto update = [this, buttons] { buttons->button(QDialogButtonBox::Ok)->setEnabled(!name().isEmpty()); };
     connect(name_, &QLineEdit::textChanged, this, update);
     update();
+    // Enter on an empty tag search creates the note, as Enter in the name does.
+    connect(tags_, &TagPicker::submitted, this, [this] {
+        if (!name().isEmpty()) accept();
+    });
+    resize(440, 460);
 }
 
 QString NewNoteDialog::name() const
@@ -72,6 +82,7 @@ QByteArray NewNoteDialog::content() const
 {
     FrontmatterPatch patch;
     patch.addIfMissing = values();
+    patch.addTags = tags_->tags();
     const FrontmatterEdit e = planFrontmatterEdit(QString(), patch);
     return e.changed ? e.text.toUtf8() : QByteArray();
 }

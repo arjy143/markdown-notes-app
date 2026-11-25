@@ -67,7 +67,157 @@ QString valueOf(const QString& l)
     return c < 0 ? QString() : l.mid(c + 1).trimmed();
 }
 
+// A tag list item or word as written: quotes and a leading '#' removed.
+QString bareTag(QStringView item)
+{
+    QString t = item.trimmed().toString();
+    if (t.size() >= 2 && (t.front() == u'"' || t.front() == u'\'') && t.back() == t.front())
+        t = t.mid(1, t.size() - 2);
+    t = t.trimmed();
+    while (t.startsWith(u'#'))
+        t.remove(0, 1);
+    return t;
+}
+
+bool listed(const QString& tag, const QStringList& tags)
+{
+    for (const QString& t : tags) {
+        if (t.compare(tag, Qt::CaseInsensitive) == 0) return true;
+    }
+    return false;
+}
+
+const FrontmatterField* findTagField(const Frontmatter& fm, QString* key)
+{
+    for (const QString& k : {u"tags"_s, u"tag"_s, u"Tags"_s}) {
+        if (const FrontmatterField* f = fm.field(k)) {
+            *key = k;
+            return f;
+        }
+    }
+    return nullptr;
+}
+
+// Puts the frontmatter back together from its first line, the changed lines in
+// between, and its closing line; every line keeps its own ending. Refuses a
+// result that wouldn't parse.
+void finishEdit(FrontmatterEdit& e, const std::vector<Line>& lines, const std::vector<Line>& out, int closing)
+{
+    QString block = lines[0].text + lines[0].ending;
+    for (const Line& l : out)
+        block += l.text + l.ending;
+    block += lines[static_cast<std::size_t>(closing)].text + lines[static_cast<std::size_t>(closing)].ending;
+    QString original;
+    for (int i = 0; i <= closing; ++i)
+        original += lines[static_cast<std::size_t>(i)].text + lines[static_cast<std::size_t>(i)].ending;
+    e.ok = true;
+    e.replaceLines = closing + 1;
+    e.changed = block != original;
+    e.text = std::move(block);
+    if (e.changed) {
+        const QByteArray checkText = e.text.toUtf8() + QByteArray("\n");
+        const Frontmatter check = parseFrontmatter(checkText);
+        if (!check.present || !check.valid) {
+            e.ok = e.changed = false;
+            e.error = u"The change would produce invalid frontmatter and was not applied."_s;
+        }
+    }
+}
+
+// Removes `remove` from the tags property, in whichever of the usual forms it's written.
+FrontmatterEdit planTagRemoval(QStringView noteText, const QStringList& remove)
+{
+    FrontmatterEdit e;
+    const Frontmatter fm = parseFrontmatter(noteText.toUtf8());
+    if (!fm.present) {
+        e.ok = true;
+        return e;
+    }
+    if (!fm.valid) {
+        e.error = u"Invalid frontmatter (%1). The note was not changed."_s.arg(fm.error);
+        return e;
+    }
+    QString tagKey;
+    const FrontmatterField* tagField = findTagField(fm, &tagKey);
+    bool any = false;
+    for (const QString& t : fm.tags)
+        any = any || listed(t, remove);
+    if (tagField == nullptr || !any) {
+        e.ok = true;
+        return e;
+    }
+    const std::vector<Line> lines = splitLines(noteText);
+    const int closing = fm.closingLine;
+    std::vector<Line> out;
+    for (int i = 1; i < closing; ++i)
+        out.push_back(lines[static_cast<std::size_t>(i)]);
+    std::size_t keyLine = out.size();
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        if (keyOf(out[i].text) == tagKey) keyLine = i;
+    }
+    std::size_t last = keyLine;
+    for (std::size_t j = keyLine + 1; j < out.size(); ++j) {
+        const QString& t = out[j].text;
+        if (t.trimmed().isEmpty()) continue;
+        if (indentOf(t) == 0 && !t.startsWith(u'-')) break;
+        last = j;
+    }
+    const QString value = keyLine < out.size() ? valueOf(out[keyLine].text) : QString();
+    if (keyLine >= out.size() || tagField->complex) {
+        e.ok = true;
+        e.skipped.append(u"tags (unsupported format)"_s);
+        return e;
+    }
+    if (tagField->isList && value.isEmpty()) {
+        // Block list: drop the matching "- tag" lines.
+        for (std::size_t j = last; j > keyLine; --j) {
+            const QString t = out[j].text.trimmed();
+            if (t.startsWith(u'-') && listed(bareTag(QStringView(t).mid(1)), remove))
+                out.erase(out.begin() + static_cast<std::ptrdiff_t>(j));
+        }
+    } else if (tagField->isList && value.startsWith(u'[') && value.endsWith(u']') && last == keyLine) {
+        // Flow list: "tags: [a, b]".
+        QString& l = out[keyLine].text;
+        const qsizetype open = l.indexOf(u'[');
+        const qsizetype close = l.lastIndexOf(u']');
+        QStringList kept;
+        for (const QString& item : l.mid(open + 1, close - open - 1).split(u',', Qt::SkipEmptyParts)) {
+            if (!listed(bareTag(item), remove)) kept.append(item.trimmed());
+        }
+        l = l.left(open + 1) + kept.join(u", "_s) + l.mid(close);
+    } else if (!tagField->isList && !value.isEmpty() && last == keyLine && !value.startsWith(u'"') &&
+               !value.startsWith(u'\'')) {
+        // "tags: a, b" or "tags: a b".
+        const bool commas = value.contains(u',');
+        QStringList kept;
+        for (const QString& w :
+             value.split(commas ? QRegularExpression(u"\\s*,\\s*"_s) : QRegularExpression(u"\\s+"_s),
+                         Qt::SkipEmptyParts)) {
+            if (!listed(bareTag(w), remove)) kept.append(w.trimmed());
+        }
+        QString& l = out[keyLine].text;
+        l = l.left(l.indexOf(u':') + 1) +
+            (kept.isEmpty() ? QString() : u' ' + kept.join(commas ? u", "_s : u" "_s));
+    } else {
+        e.ok = true;
+        e.skipped.append(u"tags (unsupported format)"_s);
+        return e;
+    }
+    finishEdit(e, lines, out, closing);
+    return e;
+}
+
 } // namespace
+
+QString tagLookAlikeKey(QStringView tag)
+{
+    QString key;
+    for (QChar c : bareTag(tag).toCaseFolded()) {
+        if (c != u'-' && c != u'_' && c != u' ') key += c;
+    }
+    if (key.size() > 3 && key.endsWith(u's')) key.chop(1);
+    return key;
+}
 
 QString cleanTag(QStringView tag)
 {
@@ -114,6 +264,25 @@ QString yamlScalar(const QString& value)
 
 FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch& patch)
 {
+    if (!patch.removeTags.isEmpty()) {
+        // Removals first, then the additions on the result, as one edit of the original.
+        FrontmatterEdit removed = planTagRemoval(noteText, patch.removeTags);
+        if (!removed.ok || !removed.changed) {
+            FrontmatterPatch rest = patch;
+            rest.removeTags.clear();
+            if (!removed.ok) return removed;
+            FrontmatterEdit e = planFrontmatterEdit(noteText, rest);
+            e.skipped = removed.skipped + e.skipped;
+            return e;
+        }
+        FrontmatterPatch rest = patch;
+        rest.removeTags.clear();
+        FrontmatterEdit e = planFrontmatterEdit(applyFrontmatterEdit(noteText, removed), rest);
+        if (!e.ok) return e;
+        if (!e.changed) return removed;
+        e.replaceLines = removed.replaceLines;
+        return e;
+    }
     FrontmatterEdit e;
     QStringList tags;
     for (const QString& t : patch.addTags) {
@@ -170,14 +339,8 @@ FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch
     }
 
     // Tags: append to the existing tags property in its own style.
-    const FrontmatterField* tagField = nullptr;
     QString tagKey;
-    for (const QString& k : {u"tags"_s, u"tag"_s, u"Tags"_s}) {
-        if (tagField == nullptr && fm.field(k) != nullptr) {
-            tagField = fm.field(k);
-            tagKey = k;
-        }
-    }
+    const FrontmatterField* tagField = findTagField(fm, &tagKey);
     QStringList addTags;
     for (const QString& t : std::as_const(tags)) {
         bool have = false;
@@ -245,27 +408,7 @@ FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch
             out.push_back({u"  - "_s + t, nl});
     }
 
-    // Every line keeps its own line ending.
-    QString block = lines[0].text + lines[0].ending;
-    for (const Line& l : out)
-        block += l.text + l.ending;
-    block += lines[static_cast<std::size_t>(closing)].text + lines[static_cast<std::size_t>(closing)].ending;
-    QString original;
-    for (int i = 0; i <= closing; ++i)
-        original += lines[static_cast<std::size_t>(i)].text + lines[static_cast<std::size_t>(i)].ending;
-    e.ok = true;
-    e.replaceLines = closing + 1;
-    e.changed = block != original;
-    e.text = std::move(block);
-    // A new block that doesn't parse back the same way would be a bug: refuse it.
-    if (e.changed) {
-        const QByteArray checkText = e.text.toUtf8() + QByteArray("\n");
-        const Frontmatter check = parseFrontmatter(checkText);
-        if (!check.present || !check.valid) {
-            e.ok = e.changed = false;
-            e.error = u"The change would produce invalid frontmatter and was not applied."_s;
-        }
-    }
+    finishEdit(e, lines, out, closing);
     return e;
 }
 

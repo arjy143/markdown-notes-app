@@ -24,6 +24,7 @@ Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows
 - **Passage search:** Search › Passages returns matching sections rather than whole notes, sortable by date. `#tag` filters apply per passage.
 - **Related notes** and **related passages** for the current paragraph, in the right panel.
 - **Tasks** tab: all `- [ ]` items in the vault, with due dates (`2025-01-31` or `due:2025-01-31`). Tasks can be completed or deleted from the list.
+- **Tags without frontmatter editing:** Ctrl+T picks the open note's tags from the vault's tags (fuzzy search; near-duplicates such as `project`/`projects` are listed together, most-used first), and Ctrl+N asks for the new note's name and tags. Typing in a frontmatter `tags:` list autocompletes too.
 - **Tags:** filter, sort and pin tags; selecting a tag shows its notes grouped by their other tags. Frontmatter properties such as `primary` / `secondary` can count as tags, and with category tags configured, new notes (Ctrl+N) offer them as dropdowns.
 - **Link suggestions:** mentions of note names are underlined while typing; Alt+Enter converts one to a link.
 - **Today's note** (Alt+D, or `markdown-notes --today`): opens today's daily note, creating it first with the daily-note tags (`journal` by default, set in Vault settings).
@@ -47,7 +48,8 @@ For llama.cpp, which serves one model per process, set "Embedding server" separa
 | Ctrl+O | Quick switcher (Shift+Enter creates a note) |
 | Ctrl+Shift+F | Search |
 | Ctrl+E | Reading view |
-| Ctrl+N / F2 | New note / rename (updates links) |
+| Ctrl+N / F2 | New note (name and tags) / rename (updates links) |
+| Ctrl+T | Edit the note's tags |
 | Ctrl+F / Ctrl+H | Find / replace |
 | Alt+D | Today's note |
 | Ctrl+Shift+C | Quick capture |

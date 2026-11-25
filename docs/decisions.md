@@ -306,3 +306,12 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
   - The tags go in through the same merge as the assistant's suggestions. A template's own `tags` keep their style, a tag already there (in any case) isn't repeated, and a template whose frontmatter doesn't parse is used unchanged.
   - Quick capture to the daily note creates a missing note the same way, so the note is tagged however it's created.
 - **Existing notes are never changed**, even when they lack the tags: opening a note mustn't modify it.
+
+## 2026-11-25 — Picking tags without editing frontmatter
+
+- **Edit › Tags… (Ctrl+T)** opens the open note's frontmatter tags in a picker. Clicking a tag removes it. Typing searches the vault's tags fuzzily, with the same scorer as the quick switcher, matching nested tags on their last part too. Enter adds the highlighted tag, and Enter on an empty search finishes. The change goes into the editor as one undoable edit, saved like typing.
+- **Fewer duplicates:** spellings that look the same (case, `-`, `_`, spaces and a plural `s` ignored, the rule Vault health already used, now shared as `tagLookAlikeKey`) are listed together, most-used first. A tag that looks like the search ranks above other matches. A typed tag that already exists in another case uses the vault's spelling. A new tag is offered last, cleaned as Obsidian requires.
+- **Removing tags** is new in the frontmatter merge (`FrontmatterPatch::removeTags`). It works on block lists, flow lists and `tags: a, b` / `tags: a b` strings, keeping the rest of each line and every line ending. Removing the last block item leaves `tags:`. Other forms (nested values) are reported, not changed. Removals and additions are one edit.
+- **New notes:** Ctrl+N now always asks for a name and offers the same picker (plus the category dropdowns when they're configured). Previously it created "Untitled" straight away when no categories were set; the name field starts as "Untitled", so Enter keeps the quick path. Notes created from links and the quick switcher are unchanged.
+- **Autocomplete in frontmatter:** inside the `tags` (or `tag`) property, as a block-list item, in a flow list or in a plain string, typing a tag shows the vault's tags, as `#` does in the body.
+- Only frontmatter tags are edited. Inline `#tags` in the body stay where they are.
