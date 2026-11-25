@@ -7,6 +7,7 @@
 #include "ui/MainWindow.h"
 #include "ui/NoteEditor.h"
 #include "ui/Panels.h"
+#include "ui/ShortcutsDialog.h"
 
 #include <QAction>
 #include <QApplication>
@@ -19,6 +20,7 @@
 #include <QSignalSpy>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTreeWidget>
 
 using namespace mn;
 using namespace mn::ui;
@@ -375,6 +377,32 @@ private Q_SLOTS:
         // Never into the vault's hidden folders; and the vault itself is untouched.
         QVERIFY(!w.exportNote(v.path(u".obsidian/hub.html"_s), false, &err));
         QCOMPARE(test::snapshotTree(v.root()), before);
+    }
+
+    void shortcutCheatsheet()
+    {
+        MainWindow w;
+        ShortcutsDialog d(w.menuBar());
+        auto find = [&d](const QString& action) -> QString {
+            for (int i = 0; i < d.list()->topLevelItemCount(); ++i) {
+                QTreeWidgetItem* g = d.list()->topLevelItem(i);
+                for (int j = 0; j < g->childCount(); ++j) {
+                    if (g->child(j)->text(0) == action && !g->child(j)->isHidden())
+                        return g->child(j)->text(1);
+                }
+            }
+            return {};
+        };
+        // Read from the menus, so these are the real shortcuts.
+        QCOMPARE(find(u"Quick switcher"_s), QKeySequence(u"Ctrl+O"_s).toString(QKeySequence::NativeText));
+        QCOMPARE(find(u"Insert timestamp"_s),
+                 QKeySequence(u"Alt+Shift+T"_s).toString(QKeySequence::NativeText));
+        QCOMPARE(find(u"Keyboard shortcuts"_s), u"F1"_s);
+        QCOMPARE(find(u"Indent / outdent list item"_s), u"Tab / Shift+Tab"_s);
+        // The filter matches actions and keys.
+        d.filter()->setText(u"checkbox"_s);
+        QVERIFY(!find(u"Toggle checkbox"_s).isEmpty());
+        QVERIFY(find(u"Quick switcher"_s).isEmpty());
     }
 
     void timestampAndCheckboxMenuEntries()

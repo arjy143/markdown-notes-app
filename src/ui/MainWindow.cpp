@@ -15,6 +15,7 @@
 #include "QuickSwitcher.h"
 #include "ReadingView.h"
 #include "SettingsDialog.h"
+#include "ShortcutsDialog.h"
 #include "TagPicker.h"
 #include "TasksPanel.h"
 #include "core/ai/FrontmatterMerge.h"
@@ -467,6 +468,10 @@ void MainWindow::buildMenus()
 #endif
 
     QMenu* help = menuBar()->addMenu(tr("&Help"));
+    help->addAction(tr("&Keyboard shortcuts"), QKeySequence(Qt::Key_F1), this, [this] {
+        ShortcutsDialog dlg(menuBar(), this);
+        dlg.exec();
+    });
     help->addAction(tr("&About"), this, [this] {
         QMessageBox::about(this, tr("About Markdown Notes"),
                            tr("<b>Markdown Notes</b> %1<br>A lightweight editor for Obsidian vaults.<br>"
