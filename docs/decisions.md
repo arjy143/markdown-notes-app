@@ -298,3 +298,11 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
   - Strokes stay editable until the capture is saved: reopening a drawing can undo them one at a time.
   - Blank drawings are 1600×1000 on white, readable in light and dark themes. The background and finished strokes are cached at view size, so a stroke in progress doesn't rescale a large screenshot on each mouse move.
   - Not included: pressure from pen tablets (Qt turns tablet input into mouse input), cropping, text, and annotating images already in notes.
+
+## 2026-11-25 — Today's note, tagged
+
+- **File › Today's note** (Alt+D), `markdown-notes --today`, and a "Today's note" launcher action (from `install.sh`) open today's daily note, at the end, in the editor. The note is the daily-notes folder plus the date in the daily-note format, as for capture.
+- **Creating it:** when the note doesn't exist, it is created at once, as Obsidian's daily notes do: from the daily-note template if one is set, with the **daily-note tags** added to its frontmatter. The tags are a new vault setting, `dailyNoteTags`, which defaults to `journal`, so settings files saved before it existed get `journal` too. An empty list adds nothing.
+  - The tags go in through the same merge as the assistant's suggestions. A template's own `tags` keep their style, a tag already there (in any case) isn't repeated, and a template whose frontmatter doesn't parse is used unchanged.
+  - Quick capture to the daily note creates a missing note the same way, so the note is tagged however it's created.
+- **Existing notes are never changed**, even when they lack the tags: opening a note mustn't modify it.

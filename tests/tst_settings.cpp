@@ -74,9 +74,27 @@ private Q_SLOTS:
         s.categoryTags = {u"tech"_s, u"projects"_s};
         s.minCategoryTags = 3;
         s.pinnedTags = {u"projects"_s, u"tech/ai"_s};
+        s.dailyNoteTags = {u"journal"_s, u"daily"_s};
         QString err;
         QVERIFY(saveVaultSettings(dir.path(), s, &err));
         QCOMPARE(loadVaultSettings(dir.path()).settings, s);
+        s.dailyNoteTags.clear(); // no tags is kept as no tags
+        QVERIFY(saveVaultSettings(dir.path(), s, &err));
+        QCOMPARE(loadVaultSettings(dir.path()).settings.dailyNoteTags, QStringList());
+    }
+
+    void dailyNoteTagsDefaultToJournal()
+    {
+        // Settings saved before the option existed get the default.
+        QTemporaryDir dir;
+        QVERIFY(QDir().mkpath(dir.path() + u"/.markdown-notes"_s));
+        QFile f(dir.path() + u"/.markdown-notes/settings.json"_s);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(R"({"version": 1, "captureToDailyNote": true})");
+        f.close();
+        const VaultSettings s = loadVaultSettings(dir.path()).settings;
+        QVERIFY(s.captureToDailyNote);
+        QCOMPARE(s.dailyNoteTags, QStringList{u"journal"_s});
     }
 };
 

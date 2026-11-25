@@ -313,6 +313,7 @@ void MainWindow::buildMenus()
     });
     file->addSeparator();
     file->addAction(tr("&New note"), QKeySequence::New, this, &MainWindow::newNote);
+    file->addAction(tr("&Today's note"), QKeySequence(u"Alt+D"_s), this, &MainWindow::openToday);
     file->addAction(tr("&Quick capture…"), QKeySequence(u"Ctrl+Shift+C"_s), this, &MainWindow::quickCapture);
     file->addAction(tr("&Save"), QKeySequence::Save, this, [this] { saveNow(); });
     file->addAction(tr("&Rename / move…"), QKeySequence(Qt::Key_F2), this, [this] {
@@ -1354,6 +1355,21 @@ void MainWindow::showAppearance()
         appearance_.save();
     }
     applyLook(appearance_);
+}
+
+void MainWindow::openToday()
+{
+    if (!vault_->isOpen()) return;
+    const DailyNoteResult r = ensureDailyNote(vault_->root(), vault_->settings());
+    if (!r.ok) {
+        QMessageBox::warning(this, tr("Today's note"), r.error);
+        return;
+    }
+    if (r.created) vault_->refresh({r.path});
+    if (r.path != note_.path && !openNote(r.path)) return;
+    editor_->moveCursor(QTextCursor::End);
+    if (readingMode()) setReadingMode(false);
+    editor_->setFocus();
 }
 
 void MainWindow::quickCapture()

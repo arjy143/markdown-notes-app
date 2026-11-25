@@ -237,7 +237,7 @@ private Q_SLOTS:
         QVERIFY2(r.ok, qPrintable(r.error));
         QCOMPARE(r.path, u"Daily/2025-03-04.md"_s);
         QCOMPARE(test::readBytes(v.path(u"Daily/2025-03-04.md"_s)),
-                 QByteArray("# 2025-03-04\n- 09:05 in the daily note\n"));
+                 QByteArray("---\ntags:\n  - journal\n---\n# 2025-03-04\n- 09:05 in the daily note\n"));
 
         // Nothing else was touched.
         auto after = test::snapshotTree(v.root());
@@ -253,6 +253,66 @@ private Q_SLOTS:
         QVERIFY(!appendCapture(v.root(), bad, u"x"_s).ok);
         QVERIFY(!QFile::exists(v.path(u".obsidian/inbox.md"_s)));
         QVERIFY(!appendCapture(v.root(), VaultSettings{}, u"   "_s).ok);
+    }
+
+    void dailyNoteIsCreatedWithItsTags()
+    {
+        test::VaultCopy v(u"health-vault"_s);
+        const auto before = test::snapshotTree(v.root());
+        VaultSettings s;
+        s.dailyNotesFolder = u"Journal"_s;
+        const QDateTime at(QDate(2025, 3, 4), QTime(9, 5));
+        DailyNoteResult r = ensureDailyNote(v.root(), s, at);
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QVERIFY(r.created);
+        QCOMPARE(r.path, u"Journal/2025-03-04.md"_s);
+        QCOMPARE(test::readBytes(v.path(r.path)), QByteArray("---\ntags:\n  - journal\n---\n"));
+
+        // Opening it again changes nothing, even after it was edited.
+        QVERIFY(test::writeBytes(v.path(r.path), "my day\r\n"));
+        r = ensureDailyNote(v.root(), s, at.addSecs(3600));
+        QVERIFY(r.ok && !r.created);
+        QCOMPARE(test::readBytes(v.path(r.path)), QByteArray("my day\r\n"));
+
+        // From the template, with the tag added to its frontmatter.
+        s.dailyNoteTemplate = u"templates/Daily.md"_s;
+        r = ensureDailyNote(v.root(), s, at.addDays(1));
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QCOMPARE(test::readBytes(v.path(r.path)), QByteArray("---\ntags:\n  - journal\n---\n# 2025-03-05\n"));
+
+        auto after = test::snapshotTree(v.root());
+        after.remove(u"Journal/2025-03-04.md"_s);
+        after.remove(u"Journal/2025-03-05.md"_s);
+        QCOMPARE(after, before);
+
+        // Hidden folders are refused.
+        s.dailyNotesFolder = u".journal"_s;
+        QVERIFY(!ensureDailyNote(v.root(), s, at).ok);
+        QVERIFY(!QFileInfo::exists(v.path(u".journal"_s)));
+    }
+
+    void dailyNoteTagsMergeIntoTheTemplate()
+    {
+        test::VaultCopy v(u"health-vault"_s);
+        VaultSettings s;
+        s.dailyNoteTemplate = u"templates/Daily.md"_s;
+        const QString path = u"2025-03-04.md"_s;
+        const QDateTime at(QDate(2025, 3, 4), QTime(9, 5));
+        auto withTemplate = [&](const QByteArray& tpl) {
+            if (!test::writeBytes(v.path(u"templates/Daily.md"_s), tpl)) return QString();
+            return newDailyNoteText(v.root(), s, path, at);
+        };
+        QCOMPARE(withTemplate("---\ntags: [daily]\nmood:\n---\n# {{title}}\n"),
+                 u"---\ntags: [daily, journal]\nmood:\n---\n# 2025-03-04\n"_s);
+        QCOMPARE(withTemplate("---\ntags:\n  - Journal\n---\n"), u"---\ntags:\n  - Journal\n---\n"_s);
+        // Frontmatter that doesn't parse is left as it is.
+        QCOMPARE(withTemplate("---\ntags: [a\n---\nx\n"), u"---\ntags: [a\n---\nx\n"_s);
+        s.dailyNoteTags = {u"#journal"_s, u"Daily Log"_s};
+        QCOMPARE(withTemplate("x\n"), u"---\ntags:\n  - journal\n  - Daily-Log\n---\nx\n"_s);
+        s.dailyNoteTags.clear();
+        QCOMPARE(withTemplate("x\n"), u"x\n"_s);
+        s.dailyNoteTemplate.clear();
+        QCOMPARE(newDailyNoteText(v.root(), s, path, at), QString());
     }
 
     void newFileLinksFollowTheLinkSettings()

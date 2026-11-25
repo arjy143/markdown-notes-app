@@ -128,7 +128,12 @@ Categories=Office;TextEditor;Utility;
 Keywords=notes;markdown;obsidian;vault;wiki;
 MimeType=text/markdown;
 StartupWMClass=$ID
-Actions=Capture;
+Actions=Today;Capture;
+
+[Desktop Action Today]
+Name=Today's note
+Icon=$ID
+Exec="$exec_path" --today
 
 [Desktop Action Capture]
 Name=Quick capture

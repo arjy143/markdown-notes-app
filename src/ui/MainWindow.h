@@ -132,6 +132,8 @@ private:
 public:
     // Quick capture inside the app (the target note may be the open one).
     void quickCapture();
+    // Opens today's daily note, creating it (with the daily-note tags) first.
+    void openToday();
     // Ticks off or deletes a task in its note (from the Tasks view). `confirmDelete`
     // asks first; tests pass false.
     bool editTask(const mn::TaskInfo& task, mn::TaskAction action, bool confirmDelete = true);

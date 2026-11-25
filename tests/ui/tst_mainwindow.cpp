@@ -1,4 +1,5 @@
 #include "TestUtil.h"
+#include "core/capture/Capture.h"
 #include "core/index/VaultService.h"
 #include "core/vault/TextFile.h"
 #include "ui/Appearance.h"
@@ -362,6 +363,30 @@ private Q_SLOTS:
         QCOMPARE(pasted.size(), 1);
         QVERIFY(w.editor()->bufferText().contains(u"![["_s + pasted[0] + u"]]"_s));
         QVERIFY(!QImage(v.path(u"assets/"_s + pasted[0])).isNull());
+    }
+
+    void todaysNoteIsCreatedTaggedAndOpened()
+    {
+        test::VaultCopy v(u"ui-vault"_s);
+        MainWindow w;
+        QVERIFY(w.openVault(v.root()));
+        QVERIFY(waitIndexed(w));
+        VaultSettings s = w.vault()->settings();
+        s.dailyNotesFolder = u"Journal"_s;
+        QString err;
+        QVERIFY(w.vault()->setSettings(s, &err));
+        const QString today = dailyNotePath(s, QDateTime::currentDateTime());
+        w.openToday();
+        QCOMPARE(w.currentPath(), today);
+        QCOMPARE(test::readBytes(v.path(today)), QByteArray("---\ntags:\n  - journal\n---\n"));
+        QCOMPARE(w.editor()->textCursor().position(), w.editor()->document()->characterCount() - 1);
+
+        // Typed text is kept when the command is used again.
+        w.editor()->insertPlainText(u"Morning.\n"_s);
+        w.openNote(u"Home.md"_s);
+        w.openToday();
+        QCOMPARE(w.currentPath(), today);
+        QVERIFY(w.editor()->bufferText().endsWith(u"Morning.\n"_s));
     }
 
     void quickCaptureWithAnImage()

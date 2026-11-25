@@ -42,6 +42,7 @@ private:
     QLineEdit* dailyFolder_;
     QLineEdit* dailyFormat_;
     QLineEdit* dailyTemplate_;
+    QLineEdit* dailyTags_;
     QLineEdit* tagProperties_;
     QLineEdit* categories_;
     QSpinBox* minCategories_;

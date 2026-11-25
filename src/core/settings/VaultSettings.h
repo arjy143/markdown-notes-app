@@ -32,6 +32,8 @@ struct VaultSettings {
     QString dailyNotesFolder;
     QString dailyNoteFormat = QStringLiteral("YYYY-MM-DD");
     QString dailyNoteTemplate; // vault path of a template note, or empty
+    // Tags a new daily note starts with (in its frontmatter).
+    QStringList dailyNoteTags{QStringLiteral("journal")};
     // Tag organisation. Values of these frontmatter properties also count as tags
     // (e.g. "primary", "secondary"); category tags are the vault's top-level tags.
     QStringList tagProperties;

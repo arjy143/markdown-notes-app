@@ -34,6 +34,28 @@ struct CaptureFile {
 // Whether another file in the vault already has this file name (for shortest links).
 using NameInUse = std::function<bool(const QString& fileName)>;
 
+// Vault path of the daily note for `now`: the daily-notes folder plus the date
+// in the daily-note format.
+QString dailyNotePath(const VaultSettings& s, const QDateTime& now);
+
+// The text a new daily note starts with: the daily-note template (if set and
+// readable) filled in, with the daily-note tags added to its frontmatter. A
+// template whose frontmatter doesn't parse is used as it is.
+QString newDailyNoteText(const QString& vaultRoot, const VaultSettings& s, const QString& path,
+                         const QDateTime& now);
+
+struct DailyNoteResult {
+    bool ok = false;
+    QString path;  // vault path of the daily note
+    QString error; // when !ok
+    bool created = false;
+};
+
+// Today's daily note, created first (atomically, from newDailyNoteText) when it
+// doesn't exist. An existing note is never changed.
+DailyNoteResult ensureDailyNote(const QString& vaultRoot, const VaultSettings& s,
+                                const QDateTime& now = QDateTime::currentDateTime());
+
 // Vault path of the note a capture goes to at `now`.
 QString captureTargetPath(const VaultSettings& s, const QDateTime& now);
 
@@ -70,8 +92,8 @@ struct CaptureResult {
     QStringList attachments; // vault paths of the files saved with it
 };
 
-// Appends a capture to the target note (creating it, from the daily template if
-// one is set, when it doesn't exist yet), with `files` saved and embedded.
+// Appends a capture to the target note (creating it when it doesn't exist yet; a
+// daily note starts as newDailyNoteText), with `files` saved and embedded.
 CaptureResult appendCapture(const QString& vaultRoot, const VaultSettings& s, const QString& text,
                             const QDateTime& now = QDateTime::currentDateTime(),
                             const QList<CaptureFile>& files = {}, const NameInUse& nameInUse = {});

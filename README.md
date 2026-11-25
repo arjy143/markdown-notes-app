@@ -26,6 +26,7 @@ Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows
 - **Tasks** tab: all `- [ ]` items in the vault, with due dates (`2025-01-31` or `due:2025-01-31`). Tasks can be completed or deleted from the list.
 - **Tags:** filter, sort and pin tags; selecting a tag shows its notes grouped by their other tags. Frontmatter properties such as `primary` / `secondary` can count as tags, and with category tags configured, new notes (Ctrl+N) offer them as dropdowns.
 - **Link suggestions:** mentions of note names are underlined while typing; Alt+Enter converts one to a link.
+- **Today's note** (Alt+D, or `markdown-notes --today`): opens today's daily note, creating it first with the daily-note tags (`journal` by default, set in Vault settings).
 - **Quick capture:** `markdown-notes --capture` appends a line to `Inbox.md` or today's daily note. Paste images or draw (Ctrl+D) in the box, or double-click an image to draw on it; they are saved to the attachment folder and embedded.
 - **Appearance** (View): theme, accent colour, fonts and line length.
 
@@ -48,6 +49,7 @@ For llama.cpp, which serves one model per process, set "Embedding server" separa
 | Ctrl+E | Reading view |
 | Ctrl+N / F2 | New note / rename (updates links) |
 | Ctrl+F / Ctrl+H | Find / replace |
+| Alt+D | Today's note |
 | Ctrl+Shift+C | Quick capture |
 | Ctrl+Shift+M / A | Suggest frontmatter / ask your notes |
 | Ctrl+Shift+B / R | Toggle left / right panel |

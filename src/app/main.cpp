@@ -57,6 +57,8 @@ int main(int argc, char* argv[])
     QCommandLineOption capture(u"capture"_s, u"Open only the quick-capture box: the text is appended to the "
                                              "vault's inbox (or today's daily note), then the app exits."_s);
     cli.addOption(capture);
+    QCommandLineOption today(u"today"_s, u"Open today's daily note (created if needed)."_s);
+    cli.addOption(today);
     cli.addOption(benchStartup);
     cli.addOption(benchIdle);
     cli.addPositionalArgument(u"vault"_s, u"Vault folder to open."_s, u"[vault]"_s);
@@ -108,7 +110,10 @@ int main(int argc, char* argv[])
         QString err;
         window.openVault(vault, &err);
         const QString note = cli.positionalArguments().value(1);
-        if (!note.isEmpty()) window.openNote(note);
+        if (cli.isSet(today))
+            window.openToday();
+        else if (!note.isEmpty())
+            window.openNote(note);
     } else {
         QTimer::singleShot(0, &window, [&window] { window.promptForVault(); });
     }

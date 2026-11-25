@@ -95,7 +95,7 @@ void applyJson(VaultSettings& s, const QJsonObject& o)
     if (o.contains(u"dailyNoteTemplate"_s)) s.dailyNoteTemplate = o.value(u"dailyNoteTemplate"_s).toString();
     auto stringList = [&](const QString& key) {
         QStringList out;
-        for (const QJsonValue& v : o.value(key).toArray()) {
+        for (const auto& v : o.value(key).toArray()) {
             const QString t = v.toString().trimmed();
             if (!t.isEmpty()) out.append(t);
         }
@@ -104,6 +104,7 @@ void applyJson(VaultSettings& s, const QJsonObject& o)
     if (o.contains(u"tagProperties"_s)) s.tagProperties = stringList(u"tagProperties"_s);
     if (o.contains(u"categoryTags"_s)) s.categoryTags = stringList(u"categoryTags"_s);
     if (o.contains(u"pinnedTags"_s)) s.pinnedTags = stringList(u"pinnedTags"_s);
+    if (o.contains(u"dailyNoteTags"_s)) s.dailyNoteTags = stringList(u"dailyNoteTags"_s);
     if (o.contains(u"minCategoryTags"_s))
         s.minCategoryTags = std::clamp(o.value(u"minCategoryTags"_s).toInt(2), 0, 20);
     if (o.contains(u"templatesFolder"_s)) s.templatesFolder = o.value(u"templatesFolder"_s).toString();
@@ -202,6 +203,7 @@ bool saveVaultSettings(const QString& vaultRoot, const VaultSettings& s, QString
     o.insert(u"dailyNotesFolder"_s, s.dailyNotesFolder);
     o.insert(u"dailyNoteFormat"_s, s.dailyNoteFormat);
     o.insert(u"dailyNoteTemplate"_s, s.dailyNoteTemplate);
+    o.insert(u"dailyNoteTags"_s, QJsonArray::fromStringList(s.dailyNoteTags));
     o.insert(u"tagProperties"_s, QJsonArray::fromStringList(s.tagProperties));
     o.insert(u"categoryTags"_s, QJsonArray::fromStringList(s.categoryTags));
     o.insert(u"minCategoryTags"_s, s.minCategoryTags);

@@ -66,12 +66,16 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     dailyFormat_ = new QLineEdit(s.dailyNoteFormat, this);
     dailyTemplate_ = new QLineEdit(s.dailyNoteTemplate, this);
     dailyTemplate_->setPlaceholderText(tr("e.g. templates/Daily.md"));
+    dailyTags_ = new QLineEdit(s.dailyNoteTags.join(u", "_s), this);
+    dailyTags_->setPlaceholderText(tr("e.g. journal"));
+    dailyTags_->setToolTip(tr("Added to new daily notes"));
     form->addRow(tr("Quick capture goes to:"), captureTo_);
     form->addRow(tr("Inbox note:"), captureNote_);
     form->addRow(tr("Capture format:"), captureFormat_);
     form->addRow(tr("Daily notes folder:"), dailyFolder_);
     form->addRow(tr("Daily note name format:"), dailyFormat_);
     form->addRow(tr("Daily note template:"), dailyTemplate_);
+    form->addRow(tr("Daily note tags:"), dailyTags_);
     tagProperties_ = new QLineEdit(s.tagProperties.join(u", "_s), this);
     tagProperties_->setPlaceholderText(tr("e.g. primary, secondary"));
     tagProperties_->setToolTip(tr("Properties whose values are treated as tags"));
@@ -148,6 +152,7 @@ VaultSettings SettingsDialog::settings() const
     };
     s.tagProperties = list(tagProperties_->text());
     s.categoryTags = list(categories_->text());
+    s.dailyNoteTags = list(dailyTags_->text());
     s.minCategoryTags = minCategories_->value();
     return s;
 }

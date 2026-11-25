@@ -1,5 +1,6 @@
 #include "Capture.h"
 
+#include "core/ai/FrontmatterMerge.h"
 #include "core/links/NewLink.h"
 #include "core/templates/Templates.h"
 #include "core/vault/FileTypes.h"
@@ -14,14 +15,68 @@ using namespace Qt::StringLiterals;
 
 namespace mn {
 
+QString dailyNotePath(const VaultSettings& s, const QDateTime& now)
+{
+    const QString name = formatMoment(now, s.dailyNoteFormat.isEmpty() ? u"YYYY-MM-DD"_s : s.dailyNoteFormat);
+    return paths::normalize(paths::join(s.dailyNotesFolder, QString(name + u".md"_s))).value_or(QString());
+}
+
+QString newDailyNoteText(const QString& vaultRoot, const VaultSettings& s, const QString& path,
+                         const QDateTime& now)
+{
+    QString text;
+    if (!s.dailyNoteTemplate.isEmpty()) {
+        const LoadedText tpl = loadTextFile(paths::toAbsolute(vaultRoot, s.dailyNoteTemplate));
+        if (tpl.editable()) {
+            TemplateContext ctx;
+            ctx.title = paths::linkName(path);
+            ctx.now = now;
+            ctx.dateFormat = s.dateFormat;
+            ctx.timeFormat = s.timeFormat;
+            text = substituteTemplate(tpl.text, ctx);
+        }
+    }
+    FrontmatterPatch patch;
+    for (const QString& t : s.dailyNoteTags) {
+        const QString c = cleanTag(t);
+        if (!c.isEmpty()) patch.addTags.append(c);
+    }
+    if (patch.addTags.isEmpty()) return text;
+    const FrontmatterEdit e = planFrontmatterEdit(text, patch);
+    return e.ok && e.changed ? applyFrontmatterEdit(text, e) : text;
+}
+
+DailyNoteResult ensureDailyNote(const QString& vaultRoot, const VaultSettings& s, const QDateTime& now)
+{
+    DailyNoteResult r;
+    r.path = dailyNotePath(s, now);
+    const QString why = checkNewVaultPath(r.path);
+    if (r.path.isEmpty() || !why.isEmpty()) {
+        r.error = u"The daily note \"%1\" isn't allowed: %2"_s.arg(r.path, why);
+        return r;
+    }
+    const QString abs = paths::toAbsolute(vaultRoot, r.path);
+    if (QFileInfo::exists(abs)) {
+        r.ok = true;
+        return r;
+    }
+    if (!QDir().mkpath(QFileInfo(abs).absolutePath())) {
+        r.error = u"Couldn't create the folder for \"%1\"."_s.arg(r.path);
+        return r;
+    }
+    const WriteResult w = writeFileAtomic(abs, newDailyNoteText(vaultRoot, s, r.path, now).toUtf8());
+    if (!w.ok) {
+        r.error = u"Couldn't create \"%1\": %2"_s.arg(r.path, w.error);
+        return r;
+    }
+    r.created = true;
+    r.ok = true;
+    return r;
+}
+
 QString captureTargetPath(const VaultSettings& s, const QDateTime& now)
 {
-    if (s.captureToDailyNote) {
-        const QString name =
-            formatMoment(now, s.dailyNoteFormat.isEmpty() ? u"YYYY-MM-DD"_s : s.dailyNoteFormat);
-        return paths::normalize(paths::join(s.dailyNotesFolder, QString(name + u".md"_s)))
-            .value_or(QString());
-    }
+    if (s.captureToDailyNote) return dailyNotePath(s, now);
     QString p = s.captureNote.trimmed();
     while (p.startsWith(u'/'))
         p.remove(0, 1);
@@ -140,17 +195,7 @@ CaptureResult appendCapture(const QString& vaultRoot, const VaultSettings& s, co
         raw = existing.raw;
     } else {
         r.created = true;
-        if (s.captureToDailyNote && !s.dailyNoteTemplate.isEmpty()) {
-            const LoadedText tpl = loadTextFile(paths::toAbsolute(vaultRoot, s.dailyNoteTemplate));
-            if (tpl.editable()) {
-                TemplateContext ctx;
-                ctx.title = paths::linkName(r.path);
-                ctx.now = now;
-                ctx.dateFormat = s.dateFormat;
-                ctx.timeFormat = s.timeFormat;
-                raw = substituteTemplate(tpl.text, ctx).toUtf8();
-            }
-        }
+        if (s.captureToDailyNote) raw = newDailyNoteText(vaultRoot, s, r.path, now).toUtf8();
         if (!QDir().mkpath(QFileInfo(abs).absolutePath())) {
             r.error = u"Couldn't create the folder for \"%1\"."_s.arg(r.path);
             return r;
