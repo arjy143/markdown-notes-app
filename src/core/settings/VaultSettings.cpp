@@ -153,6 +153,13 @@ void applyJson(VaultSettings& s, const QJsonObject& o)
         }
     }
     if (o.contains(u"categoriesInTags"_s)) s.categoriesInTags = o.value(u"categoriesInTags"_s).toBool(true);
+    if (o.contains(u"homeSections"_s)) {
+        s.homeSections.clear();
+        for (const QString& h : stringList(u"homeSections"_s)) {
+            if (VaultSettings::allHomeSections().contains(h) && !s.homeSections.contains(h))
+                s.homeSections.append(h);
+        }
+    }
     if (o.contains(u"writeEmptyProperties"_s))
         s.writeEmptyProperties = o.value(u"writeEmptyProperties"_s).toBool(true);
     if (o.contains(u"minCategoryTags"_s))
@@ -287,6 +294,7 @@ bool saveVaultSettings(const QString& vaultRoot, const VaultSettings& s, QString
     o.insert(u"noteProperties"_s, props);
     o.insert(u"categoriesInTags"_s, s.categoriesInTags);
     o.insert(u"writeEmptyProperties"_s, s.writeEmptyProperties);
+    o.insert(u"homeSections"_s, QJsonArray::fromStringList(s.homeSections));
     o.insert(u"tagProperties"_s, QJsonArray::fromStringList(s.tagProperties));
     o.insert(u"categoryTags"_s, QJsonArray::fromStringList(s.categoryTags));
     o.insert(u"minCategoryTags"_s, s.minCategoryTags);

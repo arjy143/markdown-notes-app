@@ -330,3 +330,30 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
 - **Writing:** only properties whose value changed are written, in place: a scalar line is replaced, and a block list keeps its indentation and a flow list stays a flow list. Tags are still added and removed in their own style. New properties go at the end in form order. Properties not in the list are never touched, and values the merge can't edit (block scalars, nested values) show read-only. Any trailing comment on a changed line is dropped.
 - **Blank fields:** "Write properties left blank as empty" (on by default, as asked) writes `status:` and so on, so every note has the same keys. On an existing note these are only added together with a real change, so opening and closing the form never edits a note. Clearing a field leaves the key empty, or removes it when the option is off.
 - **YAML values:** URLs and other values with a colon not followed by a space are now written plain (`https://…`), as Obsidian writes them. They are still quoted inside flow lists. A test checks that each kind of value reads back unchanged.
+
+## 2026-11-25 — Calendar, home page, smart lists, smart paste, timestamps, export
+
+- **Calendar (left tab):** `QCalendarWidget` with a dot on each day that has a journal note. A journal note has the first daily-note tag (`journal` by default), so it matches what Today's note creates. Its date comes from the file name, read in the daily-note format (`parseMomentDate`, the inverse of `formatMoment`, which only accepts text that formats back exactly), else any `YYYY-MM-DD` in the name, else the `created` or `date` property. Clicking a day with one note opens it, and a day's notes are listed below. An empty day shows "New note for …", and a double-click creates the daily note for that date (tagged, from the template).
+- **Home page (View › Home, Ctrl+Shift+H):** shown instead of an empty editor when no note is open. It replaced a first try that made a tile of every `#project` note, which didn't work in a vault where `projects` is a category on hundreds of notes. Its sections can each be turned off in Vault settings › Home:
+  - **Today:** open or start today's note, plus a capture box that appends like Quick capture (same code, `MainWindow::captureText`).
+  - **Active:** a tile per note with a `status` that isn't finished (done, archived, cancelled…). A project spread over several notes is its hub note: the tile counts the notes it links to and the notes linking back, their open tasks and their latest edit. A one-note project is just that note. Nothing needs tagging; setting the status in Ctrl+T puts a note on the page.
+  - **Tasks due:** open tasks with due dates, overdue first.
+  - **Recently edited.**
+  - **Categories:** each category tag (or pinned tag) with its note count and the six tags most often found with it, which link into the tag pane. This is what makes a broad category like `projects` browsable by topic.
+  - **Needs attention:** notes without their category properties or `summary`, journal and template notes excluded, newest first.
+  - **On this day:** journal notes from today's date in earlier years, and from this day of the month over the past year.
+  - The data comes from one worker query (`IndexWorker::home`). Status, summary and category values come from a new `props` table of single-value frontmatter properties (index schema v6, so the cache rebuilds once). The calendar's `created` lookup uses the same table instead of reading files.
+- **Smart lists** (`core/edit/ListEdit`, headless and unit-tested):
+  - Tab and Shift+Tab indent and outdent list items, or any lines when several are selected. The indent unit follows the note: a tab, unless its list lines are indented with spaces.
+  - Ordered lists renumber after Enter, Tab, Shift+Tab, a removed line or a paste. Each list keeps its first number, each level counts on its own, and a different delimiter (`1)` vs `1.`) or a bullet ends a list. An item that starts a nested list becomes `1.`.
+  - Enter on an empty nested item outdents it, as Obsidian does.
+  - Ctrl+L toggles checkboxes, turning a plain item or line into `- [ ]`.
+  - Each action is one undo step, and lines in code fences, frontmatter or math are never changed.
+- **Timestamp (Alt+Shift+T):** puts `HH:mm - ` (the vault's time format) at the start of the line's text, after any list marker and checkbox, and replaces a timestamp already there rather than adding a second.
+- **Smart paste:**
+  - A URL pasted over a selection on one line becomes `[selection](url)`.
+  - Rich HTML (links, emphasis, headings, lists, tables, images, quotes, code) is converted to Markdown by walking the `QTextDocument` Qt builds from it. Qt's own `toMarkdown()` wasn't used: it hard-wraps at 80 columns (which Obsidian shows as line breaks), escapes inside code spans and merges quotes with the next block.
+  - HTML that is only styled text (an IDE's coloured code) is pasted as its plain text.
+  - Ctrl+Shift+V always pastes plain text.
+  - Copying from the editor now puts only plain text on the clipboard.
+- **Export (File › Export):** the reading-view rendering in a light theme. PDF uses `QPdfWriter` and `QTextDocument::print`, both in QtGui, so no PrintSupport module is needed: A4, 18 mm margins. HTML is a single file with images and math as PNG data URIs. Links to vault notes become plain text, since they don't resolve outside the app. Exporting into a hidden vault folder such as `.obsidian/` is refused.

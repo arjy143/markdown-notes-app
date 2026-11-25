@@ -65,6 +65,10 @@ public:
     QStringList filesWithTag(const QString& tag) { return store_.filesWithTag(tag); }
     std::vector<UnresolvedLink> unresolvedLinks();
     std::vector<TaskInfo> tasks() { return store_.tasks(); }
+    // Notes with `tag` and their dates: the date in the file name (in `dailyFormat`, or
+    // YYYY-MM-DD anywhere in it), else the note's created or date property (from the index).
+    std::vector<DatedNote> datedNotes(const QString& tag, const QString& dailyFormat);
+    HomeData home(const HomeRequest& req);
     std::vector<RelatedNote> relatedNotes(const QString& path, int limit);
     // `skipFolder`: notes there (e.g. templates) aren't reported as orphans.
     // `categories` / `minCategories`: report notes with too few category tags (skipped if empty).

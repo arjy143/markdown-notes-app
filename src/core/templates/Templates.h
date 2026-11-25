@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDate>
 #include <QDateTime>
 #include <QString>
 
@@ -9,6 +10,9 @@ namespace mn {
 // Formats with the Moment.js subset: YYYY YY MMMM MMM MM M DD D dddd ddd HH H
 // hh h mm m ss s A a Do, plus [literal text]. Unknown tokens are copied unchanged.
 QString formatMoment(const QDateTime& dt, QStringView format);
+// The date `text` names in a Moment.js `format` (the inverse of formatMoment for
+// dates), or an invalid date. Only text that formats back exactly counts.
+QDate parseMomentDate(QStringView text, QStringView format);
 
 struct TemplateContext {
     QString title; // current note's file name without extension

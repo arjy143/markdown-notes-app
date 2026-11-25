@@ -1,6 +1,8 @@
 #include "NoteEditor.h"
 
+#include "HtmlToMarkdown.h"
 #include "MarkdownHighlighter.h"
+#include "core/edit/ListEdit.h"
 #include "core/index/VaultService.h"
 #include "core/links/RenamePlanner.h"
 #include "core/parse/MarkdownDoc.h"
@@ -399,6 +401,7 @@ bool NoteEditor::continueList()
     const auto m = item.match(line);
     if (!m.hasMatch()) return false;
     if (m.capturedEnd(0) == line.size()) {
+        if (!m.captured(1).isEmpty()) return indentLines(true); // empty nested item: up a level
         // Empty item: end the list.
         c.movePosition(QTextCursor::StartOfBlock, QTextCursor::KeepAnchor);
         c.removeSelectedText();
@@ -414,7 +417,144 @@ bool NoteEditor::continueList()
     if (!m.captured(6).isEmpty()) marker += u"[ ] "_s;
     c.insertText(u"\n"_s + marker);
     setTextCursor(c);
+    if (!m.captured(3).isEmpty()) renumberAround(c.blockNumber(), c.blockNumber(), true); // the items after
     return true;
+}
+
+// --- smart lists -----------------------------------------------------------------
+
+namespace {
+
+// Inside frontmatter, a code fence, $$ math or a %% comment: not list text.
+bool inConstruct(const QTextBlock& b)
+{
+    return b.userState() > 0 && (static_cast<unsigned>(b.userState()) & 0xFU) != 0;
+}
+
+// Where column `col` of `before` ends up in `after`, for an edit that changed the
+// line around a common prefix and suffix.
+int mapColumn(const QString& before, const QString& after, int col)
+{
+    qsizetype p = 0;
+    while (p < before.size() && p < after.size() && before[p] == after[p])
+        ++p;
+    if (col <= p) return col;
+    const auto delta = static_cast<int>(after.size() - before.size());
+    return std::clamp(col + delta, static_cast<int>(p), static_cast<int>(after.size()));
+}
+
+} // namespace
+
+QStringList NoteEditor::linesAround(int first, int last, int* start) const
+{
+    constexpr int kContext = 300;
+    const int from = std::max(0, first - kContext);
+    const int to = std::min(document()->blockCount() - 1, last + kContext);
+    QStringList lines;
+    for (QTextBlock b = document()->findBlockByNumber(from); b.isValid() && b.blockNumber() <= to;
+         b = b.next())
+        lines.append(b.text());
+    *start = from;
+    return lines;
+}
+
+void NoteEditor::applyLines(int first, const QStringList& before, const QStringList& after, bool join)
+{
+    QTextCursor cur = textCursor();
+    const int curBlock = cur.blockNumber();
+    const int anchorBlock = document()->findBlock(cur.anchor()).blockNumber();
+    const int curCol = cur.positionInBlock();
+    const int anchorCol = cur.anchor() - document()->findBlock(cur.anchor()).position();
+    QTextCursor c(document());
+    if (join)
+        c.joinPreviousEditBlock();
+    else
+        c.beginEditBlock();
+    bool changed = false;
+    for (qsizetype i = 0; i < before.size() && i < after.size(); ++i) {
+        if (before[i] == after[i]) continue;
+        const QTextBlock b = document()->findBlockByNumber(first + static_cast<int>(i));
+        if (!b.isValid() || inConstruct(b)) continue;
+        c.setPosition(b.position());
+        c.setPosition(b.position() + b.length() - 1, QTextCursor::KeepAnchor);
+        c.insertText(after[i]);
+        changed = true;
+    }
+    c.endEditBlock();
+    if (!changed) return;
+    auto pos = [&](int block, int col) {
+        const qsizetype i = block - first;
+        const QTextBlock b = document()->findBlockByNumber(block);
+        if (i >= 0 && i < before.size() && i < after.size()) col = mapColumn(before[i], after[i], col);
+        return b.position() + std::clamp(col, 0, b.length() - 1);
+    };
+    QTextCursor restored(document());
+    restored.setPosition(pos(anchorBlock, anchorCol));
+    restored.setPosition(pos(curBlock, curCol), QTextCursor::KeepAnchor);
+    setTextCursor(restored);
+}
+
+void NoteEditor::renumberAround(int first, int last, bool join)
+{
+    int start = 0;
+    const QStringList before = linesAround(first, last, &start);
+    QStringList after = before;
+    if (lists::renumber(after, first - start, last - start)) applyLines(start, before, after, join);
+}
+
+bool NoteEditor::indentLines(bool outdent)
+{
+    if (isReadOnly()) return false;
+    const QTextCursor c = textCursor();
+    const QTextBlock firstBlock = document()->findBlock(c.selectionStart());
+    QTextBlock lastBlock = document()->findBlock(c.selectionEnd());
+    // A selection ending at the start of a line doesn't include that line.
+    if (lastBlock != firstBlock && c.selectionEnd() == lastBlock.position()) lastBlock = lastBlock.previous();
+    const bool several = firstBlock != lastBlock;
+    if (inConstruct(firstBlock)) return false;
+    if (!several && !lists::parseItem(firstBlock.text())) return false;
+    int start = 0;
+    const QStringList before = linesAround(firstBlock.blockNumber(), lastBlock.blockNumber(), &start);
+    QStringList after = before;
+    const int first = firstBlock.blockNumber() - start;
+    const int last = lastBlock.blockNumber() - start;
+    if (!lists::indentLines(after, first, last, lists::indentUnit(before), outdent)) return true;
+    lists::renumber(after, first, last);
+    applyLines(start, before, after, false);
+    return true;
+}
+
+void NoteEditor::toggleCheckboxes()
+{
+    if (isReadOnly()) return;
+    const QTextCursor c = textCursor();
+    const int first = document()->findBlock(c.selectionStart()).blockNumber();
+    QTextBlock lastBlock = document()->findBlock(c.selectionEnd());
+    if (lastBlock.blockNumber() != first && c.selectionEnd() == lastBlock.position())
+        lastBlock = lastBlock.previous();
+    QStringList before;
+    for (QTextBlock b = document()->findBlockByNumber(first);
+         b.isValid() && b.blockNumber() <= lastBlock.blockNumber(); b = b.next())
+        before.append(b.text());
+    QStringList after;
+    for (const QString& l : std::as_const(before))
+        after.append(lists::toggleCheckbox(l));
+    applyLines(first, before, after, false);
+}
+
+void NoteEditor::insertTimestamp(const QString& time)
+{
+    if (isReadOnly() || inConstruct(textCursor().block())) return;
+    const int block = textCursor().blockNumber();
+    const QString before = textCursor().block().text();
+    applyLines(block, {before}, {lists::timestampLine(before, time)}, false);
+}
+
+void NoteEditor::pastePlainText()
+{
+    plainPaste_ = true;
+    paste();
+    plainPaste_ = false;
 }
 
 void NoteEditor::keyPressEvent(QKeyEvent* e)
@@ -449,6 +589,13 @@ void NoteEditor::keyPressEvent(QKeyEvent* e)
             break;
         }
     }
+    if ((e->key() == Qt::Key_Tab && e->modifiers() == Qt::NoModifier) || e->key() == Qt::Key_Backtab) {
+        if (indentLines(e->key() == Qt::Key_Backtab)) return;
+    }
+    if (e->key() == Qt::Key_V && e->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier)) {
+        pastePlainText();
+        return;
+    }
     if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && (e->modifiers() & Qt::AltModifier)) {
         acceptLinkSuggestion();
         return;
@@ -467,7 +614,11 @@ void NoteEditor::keyPressEvent(QKeyEvent* e)
         }
         if (e->modifiers() == Qt::NoModifier && continueList()) return;
     }
+    const int blocksBefore = document()->blockCount();
     QPlainTextEdit::keyPressEvent(e);
+    // A removed line (Backspace, Delete, cut): the list it was in closes up.
+    if (document()->blockCount() < blocksBefore && !isReadOnly())
+        renumberAround(textCursor().blockNumber(), textCursor().blockNumber(), true);
     if (!e->text().isEmpty() || e->key() == Qt::Key_Backspace) {
         updateCompletion();
     } else if (e->key() == Qt::Key_Left || e->key() == Qt::Key_Right || e->key() == Qt::Key_Home ||
@@ -718,10 +869,34 @@ bool NoteEditor::canInsertFromMimeData(const QMimeData* source) const
 
 void NoteEditor::insertFromMimeData(const QMimeData* source)
 {
+    static const QRegularExpression url(uR"(^(https?|ftp|mailto|obsidian|file):\S+$)"_s);
+    QTextCursor c = textCursor();
+    const int firstBlock = document()->findBlock(c.selectionStart()).blockNumber();
+    // A URL pasted over selected text links it.
+    if (!plainPaste_ && c.hasSelection() && source->hasText() && !source->hasImage()) {
+        const QString link = source->text().trimmed();
+        const QString selected = c.selectedText();
+        if (url.match(link).hasMatch() && !selected.contains(QChar::ParagraphSeparator) &&
+            !url.match(selected.trimmed()).hasMatch() && !selected.trimmed().isEmpty()) {
+            QString target = link;
+            target.replace(u' ', u"%20"_s).replace(u')', u"%29"_s);
+            c.insertText(u'[' + selected + u"]("_s + target + u')');
+            return;
+        }
+    }
     if (attachmentHandler_ && (source->hasImage() || source->hasUrls())) {
         const QString md = attachmentHandler_(source);
         if (!md.isEmpty()) {
             textCursor().insertText(md);
+            return;
+        }
+    }
+    // Rich text (a web page, a document) as Markdown.
+    if (!plainPaste_ && source->hasHtml() && htmlHasFormatting(source->html())) {
+        const QString md = htmlToMarkdown(source->html());
+        if (!md.isEmpty()) {
+            textCursor().insertText(md);
+            renumberAround(firstBlock, textCursor().blockNumber(), true);
             return;
         }
     }
@@ -733,9 +908,20 @@ void NoteEditor::insertFromMimeData(const QMimeData* source)
         t.replace(QChar(QChar::ParagraphSeparator), u'\n');
         t.replace(QChar(QChar::LineSeparator), u'\n');
         textCursor().insertText(t);
+        if (t.contains(u'\n')) renumberAround(firstBlock, textCursor().blockNumber(), true);
         return;
     }
     QPlainTextEdit::insertFromMimeData(source);
+}
+
+QMimeData* NoteEditor::createMimeDataFromSelection() const
+{
+    // Plain text only: the buffer is Markdown, and its own formatting isn't the note's.
+    auto* m = new QMimeData;
+    QString t = textCursor().selectedText();
+    t.replace(QChar(QChar::ParagraphSeparator), u'\n');
+    m->setText(t);
+    return m;
 }
 
 } // namespace mn::ui

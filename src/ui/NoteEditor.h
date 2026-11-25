@@ -45,6 +45,11 @@ public:
     void setAttachmentHandler(AttachmentHandler h) { attachmentHandler_ = std::move(h); }
 
     void refreshCompletionSources();
+    // Smart lists and helpers, each one undoable edit.
+    void toggleCheckboxes();                             // on the selected lines (Ctrl+L)
+    void insertTimestamp(const QString& time);           // "14:32 - " at the start of the line
+    bool indentLines(bool outdent);                      // Tab / Shift+Tab on list items or several lines
+    void pastePlainText();                               // Ctrl+Shift+V
     QCompleter* completer() const { return completer_; } // the [[ / # / tags: completion list
     // Underlines mentions of note names in the current paragraph; Alt+Enter links one.
     void setLinkSuggestions(bool on);
@@ -74,6 +79,7 @@ protected:
     void resizeEvent(QResizeEvent* e) override;
     void contextMenuEvent(QContextMenuEvent* e) override;
     bool canInsertFromMimeData(const QMimeData* source) const override;
+    QMimeData* createMimeDataFromSelection() const override;
     void insertFromMimeData(const QMimeData* source) override;
 
 private:
@@ -87,6 +93,13 @@ private:
     void showCompletion(const QStringList& items, const QString& prefix);
     void insertCompletion(const QString& item);
     bool continueList();
+    // Replaces the lines from block `first` that differ between `before` and `after`,
+    // keeping the cursor on its text; `join` merges the edit into the previous undo step.
+    void applyLines(int first, const QStringList& before, const QStringList& after, bool join);
+    // Lines around blocks [first, last] (enough for a whole list), and where they start.
+    QStringList linesAround(int first, int last, int* start) const;
+    void renumberAround(int first, int last, bool join);
+    bool plainPaste_ = false;
     std::optional<LinkHit> linkAt(const QTextCursor& c) const;
 
     VaultService* vault_ = nullptr;

@@ -174,7 +174,7 @@ void PropertiesForm::load(const Frontmatter& fm)
         const bool single = f.spec.kind != PropertyKind::List;
         if (cur != nullptr && (cur->complex || (single && cur->isList))) {
             f.widget->setEnabled(false);
-            f.widget->setToolTip(tr("This value can't be edited here; change it in the note."));
+            f.widget->setToolTip(tr("Edit this value in the note."));
         }
         const QStringList values = currentValues(cur);
         if (auto* box = qobject_cast<QComboBox*>(f.widget)) {
@@ -341,7 +341,7 @@ PropertiesDialog::PropertiesDialog(const QString& noteName, const Frontmatter& f
     if (suggest_) {
         suggestButton_ = buttons->addButton(tr("Suggest"), QDialogButtonBox::ActionRole);
         suggestButton_->setAutoDefault(false);
-        suggestButton_->setToolTip(tr("Fill the empty fields with the assistant's suggestions"));
+        suggestButton_->setToolTip(tr("Fill empty fields using the assistant"));
         connect(suggestButton_, &QPushButton::clicked, this, &PropertiesDialog::suggest);
     }
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -373,7 +373,7 @@ void PropertiesDialog::suggest()
             return;
         }
         self->form_->applySuggestion(properties, tags);
-        self->status_->setText(tr("Empty fields filled in. Check them before saving."));
+        self->status_->setText(tr("Suggestions added. Review before saving."));
     });
 }
 

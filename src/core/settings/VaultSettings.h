@@ -62,16 +62,29 @@ struct VaultSettings {
     // The properties the note form offers, in this order. Empty: the default set
     // (see formProperties).
     QList<PropertySpec> noteProperties;
+    // The home page's sections, in order (see allHomeSections).
+    QStringList homeSections = allHomeSections();
     // Choosing a category also adds it to the note's tags (so Obsidian's tag pane shows it).
     bool categoriesInTags = true;
     // The form writes properties left blank as empty ("status:"), so every note has the same keys.
     bool writeEmptyProperties = true;
 
+    static QStringList allHomeSections()
+    {
+        return {QStringLiteral("today"),    QStringLiteral("active"),     QStringLiteral("tasks"),
+                QStringLiteral("recent"),   QStringLiteral("categories"), QStringLiteral("attention"),
+                QStringLiteral("onthisday")};
+    }
     // noteProperties, or when it's empty: the tag properties as categories, then
     // tags, aliases, status (draft / active / done), summary, sources and created.
     QList<PropertySpec> formProperties() const;
     // The keys of the category properties in the form.
     QStringList categoryProperties() const;
+    // The tag that marks journal notes (the calendar's dots): the first daily-note tag.
+    QString journalTag() const
+    {
+        return dailyNoteTags.isEmpty() ? QStringLiteral("journal") : dailyNoteTags.front();
+    }
     // What a category property can be: the category tags, or the pinned tags when none are set.
     QStringList categoryChoices() const { return categoryTags.isEmpty() ? pinnedTags : categoryTags; }
 

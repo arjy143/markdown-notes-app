@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Theme.h"
+
 #include <QSet>
 #include <QTextBrowser>
 
@@ -19,6 +21,11 @@ public:
     // Renders `raw` (the note's UTF-8 bytes) as the note at `path`.
     void showNote(const QString& path, const QByteArray& raw);
     void rerender();
+    // A note rendered for export: a standalone document (images and math included as
+    // resources) in `theme`, with images at most `maxImageWidth` wide and rendered
+    // at `dpr` times their size. The caller owns it.
+    QTextDocument* renderDocument(const QString& path, const QByteArray& raw, const Theme& theme,
+                                  int maxImageWidth, qreal dpr, QObject* parent);
     void scrollToHeading(const QString& subpath);
     void setMonoFamily(const QString& family);
     void setMaxLineChars(int chars);
@@ -36,8 +43,8 @@ protected:
 
 private:
     void onAnchor(const QUrl& url);
-    QString imageHtml(QTextDocument* doc, const QString& path, int w, int h);
-    QString mathHtml(QTextDocument* doc, const QString& latex, bool display);
+    QString imageHtml(QTextDocument* doc, const QString& path, int w, int h, int maxW, qreal dpr);
+    QString mathHtml(QTextDocument* doc, const QString& latex, bool display, const QColor& colour, qreal dpr);
 
     VaultService* vault_ = nullptr;
     QTextDocument* ownDoc_ = nullptr;

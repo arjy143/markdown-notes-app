@@ -3,6 +3,7 @@
 #include "core/parse/Frontmatter.h"
 
 #include <QLocale>
+#include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
 
@@ -238,6 +239,101 @@ QString substituteTemplate(QStringView text, const TemplateContext& ctx)
         i = close + 2;
     }
     return out;
+}
+
+QDate parseMomentDate(QStringView text, QStringView format)
+{
+    const QLocale en(QLocale::English, QLocale::UnitedStates);
+    QString pattern = u"^"_s;
+    enum Field { Year4, Year2, MonthName, MonthShort, Month, Day, Ignore };
+    std::vector<Field> fields;
+    qsizetype i = 0;
+    auto at = [&](QStringView tok) { return format.mid(i).startsWith(tok); };
+    while (i < format.size()) {
+        if (format[i] == u'[') {
+            const qsizetype close = format.indexOf(u']', i + 1);
+            if (close > 0) {
+                pattern += QRegularExpression::escape(format.mid(i + 1, close - i - 1).toString());
+                i = close + 1;
+                continue;
+            }
+        }
+        struct Tok {
+            QStringView tok;
+            const char16_t* re;
+            Field field;
+        };
+        static const Tok toks[] = {
+            {u"YYYY", u"(\\d{4})", Year4},
+            {u"YY", u"(\\d{2})", Year2},
+            {u"MMMM", u"([A-Za-z]+)", MonthName},
+            {u"MMM", u"([A-Za-z]+)", MonthShort},
+            {u"MM", u"(\\d{2})", Month},
+            {u"M", u"(\\d{1,2})", Month},
+            {u"Do", u"(\\d{1,2})(?:st|nd|rd|th)", Day},
+            {u"DD", u"(\\d{2})", Day},
+            {u"D", u"(\\d{1,2})", Day},
+            {u"dddd", u"([A-Za-z]+)", Ignore},
+            {u"ddd", u"([A-Za-z]+)", Ignore},
+            {u"HH", u"(\\d{2})", Ignore},
+            {u"H", u"(\\d{1,2})", Ignore},
+            {u"hh", u"(\\d{2})", Ignore},
+            {u"h", u"(\\d{1,2})", Ignore},
+            {u"mm", u"(\\d{2})", Ignore},
+            {u"m", u"(\\d{1,2})", Ignore},
+            {u"ss", u"(\\d{2})", Ignore},
+            {u"s", u"(\\d{1,2})", Ignore},
+            {u"A", u"(AM|PM)", Ignore},
+            {u"a", u"(am|pm)", Ignore},
+        };
+        bool matched = false;
+        for (const Tok& tk : toks) {
+            if (!at(tk.tok)) continue;
+            pattern += QString::fromUtf16(tk.re);
+            fields.push_back(tk.field);
+            i += tk.tok.size();
+            matched = true;
+            break;
+        }
+        if (!matched) {
+            pattern += QRegularExpression::escape(format.mid(i, 1).toString());
+            ++i;
+        }
+    }
+    const QRegularExpressionMatch m = QRegularExpression(pattern + u'$').matchView(text);
+    if (!m.hasMatch()) return {};
+    int year = -1;
+    int month = -1;
+    int day = -1;
+    for (std::size_t f = 0; f < fields.size(); ++f) {
+        const QString v = m.captured(static_cast<int>(f) + 1);
+        switch (fields[f]) {
+        case Year4:
+            year = v.toInt();
+            break;
+        case Year2:
+            year = 2000 + v.toInt();
+            break;
+        case MonthName:
+        case MonthShort:
+            for (int mo = 1; mo <= 12; ++mo) {
+                const auto form = fields[f] == MonthName ? QLocale::LongFormat : QLocale::ShortFormat;
+                if (en.monthName(mo, form).compare(v, Qt::CaseInsensitive) == 0) month = mo;
+            }
+            break;
+        case Month:
+            month = v.toInt();
+            break;
+        case Day:
+            day = v.toInt();
+            break;
+        case Ignore:
+            break;
+        }
+    }
+    const QDate d(year, month, day);
+    if (!d.isValid() || formatMoment(QDateTime(d, QTime(0, 0)), format) != text) return {};
+    return d;
 }
 
 TemplateInsertion planTemplateInsertion(QStringView noteText, QStringView templateText)

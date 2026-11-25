@@ -5,12 +5,14 @@
 #include "core/ai/Prompts.h"
 #include "core/parse/Frontmatter.h"
 #include "core/parse/NoteMetadata.h"
+#include "core/templates/Templates.h"
 #include "core/vault/Paths.h"
 #include "core/vault/TextFile.h"
 
 #include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QRegularExpression>
 #include <QThreadPool>
@@ -937,6 +939,165 @@ QStringList IndexWorker::renameCandidates(const std::vector<Move>& moves)
     out += store_.notesLinkingToNames(keys);
     out.removeDuplicates();
     return out;
+}
+
+} // namespace mn
+
+namespace mn {
+
+std::vector<DatedNote> IndexWorker::datedNotes(const QString& tag, const QString& dailyFormat)
+{
+    static const QRegularExpression iso(u"(\\d{4})-(\\d{2})-(\\d{2})"_s);
+    std::vector<DatedNote> out;
+    const QHash<QString, QHash<QString, QString>> props = store_.properties({u"created"_s, u"date"_s});
+    for (const QString& path : store_.filesWithTag(tag)) {
+        const QString name = paths::linkName(path);
+        QDate d;
+        // The daily-note format may contain folders ("YYYY/MM-DD"): try the path's tail too.
+        const int slashes = static_cast<int>(dailyFormat.count(u'/'));
+        QString tail = name;
+        const QStringList parts = QString(path).chopped(path.endsWith(u".md"_s) ? 3 : 0).split(u'/');
+        if (slashes > 0 && parts.size() > slashes) tail = parts.mid(parts.size() - slashes - 1).join(u'/');
+        if (!dailyFormat.isEmpty()) d = parseMomentDate(tail, dailyFormat);
+        if (!d.isValid()) {
+            const QRegularExpressionMatch m = iso.match(name);
+            if (m.hasMatch()) d = QDate(m.captured(1).toInt(), m.captured(2).toInt(), m.captured(3).toInt());
+        }
+        for (const QString& key : {u"created"_s, u"date"_s}) {
+            if (!d.isValid()) d = QDate::fromString(props.value(path).value(key).left(10), Qt::ISODate);
+        }
+        if (d.isValid()) out.push_back({path, d});
+    }
+    return out;
+}
+
+HomeData IndexWorker::home(const HomeRequest& req)
+{
+    HomeData h;
+    const QHash<QString, qint64> times = store_.noteTimes();
+    auto modified = [&](const QString& p) { return QDateTime::fromMSecsSinceEpoch(times.value(p)); };
+    auto skipped = [&](const QString& p) {
+        return !req.templatesFolder.isEmpty() && paths::isInside(p, req.templatesFolder);
+    };
+    struct Counts {
+        int open = 0;
+        int done = 0;
+    };
+    QHash<QString, Counts> taskCounts;
+    const std::vector<TaskInfo> tasks = store_.tasks();
+    for (const TaskInfo& t : tasks)
+        (t.done ? taskCounts[t.path].done : taskCounts[t.path].open)++;
+
+    // Active: an unfinished status. A hub note's group is the notes it links to and
+    // the notes that link to it.
+    QStringList finished;
+    for (const QString& f : req.finishedStatuses)
+        finished.append(f.toLower());
+    const QHash<QString, QHash<QString, QString>> props = store_.properties({u"summary"_s});
+    for (const auto& [path, status] : store_.filesWithProperty(u"status"_s)) {
+        if (finished.contains(status.trimmed().toLower()) || skipped(path)) continue;
+        NoteCard c;
+        c.path = path;
+        c.title = paths::linkName(path);
+        c.status = status;
+        c.summary = props.value(path).value(u"summary"_s);
+        QSet<QString> group;
+        for (const StoredLink& l : store_.linksFrom(path)) {
+            const Resolution r = files_->resolve(l.linkpath, path);
+            if (r.resolved() && files_->file(r.file).kind == FileKind::Note)
+                group.insert(files_->file(r.file).path);
+        }
+        for (const StoredLink& l : store_.linksWithNameKeys({linkNameKey(path)})) {
+            const Resolution r = files_->resolve(l.linkpath, l.sourcePath);
+            if (r.resolved() && files_->file(r.file).path == path) group.insert(l.sourcePath);
+        }
+        group.remove(path);
+        c.linkedNotes = static_cast<int>(group.size());
+        qint64 latest = times.value(path);
+        group.insert(path);
+        for (const QString& g : std::as_const(group)) {
+            latest = std::max(latest, times.value(g));
+            c.openTasks += taskCounts.value(g).open;
+            c.doneTasks += taskCounts.value(g).done;
+        }
+        c.modified = QDateTime::fromMSecsSinceEpoch(latest);
+        h.active.push_back(std::move(c));
+    }
+    std::sort(h.active.begin(), h.active.end(), [](const NoteCard& a, const NoteCard& b) {
+        return a.modified != b.modified ? a.modified > b.modified : a.path < b.path;
+    });
+
+    // Recently edited.
+    std::vector<std::pair<qint64, QString>> byTime;
+    for (auto it = times.constBegin(); it != times.constEnd(); ++it) {
+        if (!skipped(it.key())) byTime.emplace_back(it.value(), it.key());
+    }
+    std::sort(byTime.begin(), byTime.end(), [](const auto& a, const auto& b) {
+        return a.first != b.first ? a.first > b.first : a.second < b.second;
+    });
+    for (std::size_t i = 0; i < byTime.size() && static_cast<int>(i) < req.limit; ++i) {
+        NoteCard c;
+        c.path = byTime[i].second;
+        c.title = paths::linkName(c.path);
+        c.modified = modified(c.path);
+        h.recent.push_back(std::move(c));
+    }
+
+    // Open tasks with a due date, soonest (and overdue) first.
+    for (const TaskInfo& t : tasks) {
+        if (!t.done && !t.due.isEmpty()) h.due.push_back(t);
+    }
+    std::sort(h.due.begin(), h.due.end(), [](const TaskInfo& a, const TaskInfo& b) {
+        return a.due != b.due ? a.due < b.due : (a.path != b.path ? a.path < b.path : a.line < b.line);
+    });
+    if (static_cast<int>(h.due.size()) > req.limit) h.due.resize(static_cast<std::size_t>(req.limit));
+
+    // Categories: how many notes, and the topics within each.
+    const std::vector<TagCount> counts = store_.tagCounts();
+    for (const QString& cat : req.categories) {
+        CategoryOverview o;
+        o.tag = cat;
+        for (const TagCount& t : counts) {
+            if (t.tag.compare(cat, Qt::CaseInsensitive) == 0) o.notes = t.notes;
+        }
+        o.topTags = store_.coTags(cat, req.categories, 6);
+        h.categories.push_back(std::move(o));
+    }
+
+    // Needs attention: notes (not journal or template notes) without the properties
+    // a processed note has.
+    if (!req.requiredKeys.isEmpty()) {
+        const QHash<QString, QHash<QString, QString>> set = store_.properties(req.requiredKeys);
+        QSet<QString> journal;
+        if (!req.journalTag.isEmpty()) {
+            for (const QString& p : store_.filesWithTag(req.journalTag))
+                journal.insert(p);
+        }
+        for (const auto& [time, path] : byTime) {
+            if (journal.contains(path)) continue;
+            AttentionNote a;
+            a.path = path;
+            for (const QString& k : req.requiredKeys) {
+                if (!set.value(path).contains(k)) a.missing.append(k);
+            }
+            if (a.missing.isEmpty()) continue;
+            ++h.attentionTotal;
+            if (static_cast<int>(h.attention.size()) < req.limit) h.attention.push_back(std::move(a));
+        }
+    }
+
+    // On this day: journal notes from this day of the month, in the last year's
+    // months and in earlier years on this date.
+    if (!req.journalTag.isEmpty() && req.today.isValid()) {
+        for (const DatedNote& d : datedNotes(req.journalTag, req.dailyFormat)) {
+            if (d.date >= req.today || d.date.day() != req.today.day()) continue;
+            if (d.date.month() == req.today.month() || d.date > req.today.addYears(-1))
+                h.onThisDay.push_back(d);
+        }
+        std::sort(h.onThisDay.begin(), h.onThisDay.end(),
+                  [](const DatedNote& a, const DatedNote& b) { return a.date > b.date; });
+    }
+    return h;
 }
 
 } // namespace mn

@@ -412,7 +412,7 @@ void DrawingDialog::updateActions()
 void DrawingDialog::reject()
 {
     if (canvas_->isModified()) {
-        const auto r = QMessageBox::question(this, windowTitle(), tr("Discard the changes to this drawing?"),
+        const auto r = QMessageBox::question(this, windowTitle(), tr("Discard changes?"),
                                              QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
         if (r != QMessageBox::Discard) return;
     }

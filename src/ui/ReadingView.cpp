@@ -36,39 +36,50 @@ void ReadingView::showNote(const QString& path, const QByteArray& raw)
     rerender();
 }
 
-void ReadingView::rerender()
+QTextDocument* ReadingView::renderDocument(const QString& path, const QByteArray& raw, const Theme& theme,
+                                           int maxImageWidth, qreal dpr, QObject* parent)
 {
-    QElapsedTimer t;
-    t.start();
-    const int scroll = verticalScrollBar()->value();
-    auto* doc = new QTextDocument(this);
+    auto* doc = new QTextDocument(parent);
     doc->setDefaultFont(font());
     doc->setDocumentMargin(16);
-    const QColor linkColor = Theme::fromPalette(palette()).link;
     const QString mono =
         monoFamily_.isEmpty() ? QString() : u"pre, code { font-family: '%1'; }"_s.arg(monoFamily_);
     doc->setDefaultStyleSheet(
         mono +
-        u"a { color: %1; text-decoration: none; } h1, h2, h3 { margin-top: 14px; }"_s.arg(linkColor.name()));
+        u"a { color: %1; text-decoration: none; } h1, h2, h3 { margin-top: 14px; }"_s.arg(theme.link.name()));
 
     RenderContext ctx;
     ctx.files = vault_ ? &vault_->files() : nullptr;
-    ctx.notePath = path_;
-    ctx.theme = Theme::fromPalette(palette());
+    ctx.notePath = path;
+    ctx.theme = theme;
     ctx.fontPointSize = font().pointSizeF();
-    ctx.maxImageWidth = std::max(100, viewport()->width() - 48);
+    ctx.maxImageWidth = maxImageWidth;
     ctx.strictLineBreaks = vault_ != nullptr && vault_->settings().strictLineBreaks;
-    ctx.toggledCallouts = toggled_;
-    ctx.imageHtml = [this, doc](const QString& p, int w, int h) { return imageHtml(doc, p, w, h); };
-    ctx.mathHtml = [this, doc](const QString& latex, bool display) { return mathHtml(doc, latex, display); };
+    if (path == path_) ctx.toggledCallouts = toggled_;
+    ctx.imageHtml = [this, doc, maxImageWidth, dpr](const QString& p, int w, int h) {
+        return imageHtml(doc, p, w, h, maxImageWidth, dpr);
+    };
+    const QColor colour = theme.text;
+    ctx.mathHtml = [this, doc, colour, dpr](const QString& latex, bool display) {
+        return mathHtml(doc, latex, display, colour, dpr);
+    };
     ctx.loadNote = [this](const QString& p) -> std::optional<QByteArray> {
         if (vault_ == nullptr) return std::nullopt;
         QFile f(vault_->absolutePath(p));
         if (!f.open(QIODevice::ReadOnly)) return std::nullopt;
         return f.readAll();
     };
-    const QString html = renderNote(raw_, ctx);
-    doc->setHtml(html);
+    doc->setHtml(renderNote(raw, ctx));
+    return doc;
+}
+
+void ReadingView::rerender()
+{
+    QElapsedTimer t;
+    t.start();
+    const int scroll = verticalScrollBar()->value();
+    QTextDocument* doc = renderDocument(path_, raw_, Theme::fromPalette(palette()),
+                                        std::max(100, viewport()->width() - 48), devicePixelRatioF(), this);
     // QTextEdit deletes its own default document; documents we created are ours to free.
     QTextDocument* previous = ownDoc_;
     setDocument(doc);
@@ -125,15 +136,13 @@ void ReadingView::scrollToHeading(const QString& subpath)
     verticalScrollBar()->setValue(verticalScrollBar()->value() + r.top());
 }
 
-QString ReadingView::imageHtml(QTextDocument* doc, const QString& path, int w, int h)
+QString ReadingView::imageHtml(QTextDocument* doc, const QString& path, int w, int h, int maxW, qreal dpr)
 {
     if (vault_ == nullptr) return {};
     QImageReader reader(vault_->absolutePath(path));
     reader.setAutoTransform(true);
     const QSize natural = reader.size();
     if (!natural.isValid()) return {};
-    const qreal dpr = devicePixelRatioF();
-    const int maxW = std::max(100, viewport()->width() - 48);
     int lw = w > 0 ? w : natural.width();
     int lh = h > 0 ? h
                    : (w > 0 ? qRound(static_cast<double>(natural.height()) * w / natural.width())
@@ -152,13 +161,12 @@ QString ReadingView::imageHtml(QTextDocument* doc, const QString& path, int w, i
     return u"<img src=\"%1\" width=\"%2\" height=\"%3\"/>"_s.arg(url.toString()).arg(lw).arg(lh);
 }
 
-QString ReadingView::mathHtml(QTextDocument* doc, const QString& latex, bool display)
+QString ReadingView::mathHtml(QTextDocument* doc, const QString& latex, bool display, const QColor& colour,
+                              qreal dpr)
 {
-    const Theme theme = Theme::fromPalette(palette());
     const qreal size = font().pointSizeF() * (display ? 1.15 : 1.0);
-    const qreal dpr = devicePixelRatioF();
     QString err;
-    const QImage img = MathRenderer::instance().render(latex, display, size, dpr, theme.text, &err);
+    const QImage img = MathRenderer::instance().render(latex, display, size, dpr, colour, &err);
     if (img.isNull()) return {};
     const QUrl url(u"mn-math://%1"_s.arg(++resourceCounter_));
     doc->addResource(QTextDocument::ImageResource, url, img);

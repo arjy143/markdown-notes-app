@@ -1,10 +1,12 @@
 #include "MainWindow.h"
 
 #include "AppearanceDialog.h"
+#include "CalendarPanel.h"
 #include "CaptureWindow.h"
 #include "FileTreeModel.h"
 #include "FindBar.h"
 #include "HealthDialog.h"
+#include "HomePage.h"
 #include "MarkdownHighlighter.h"
 #include "NewNoteDialog.h"
 #include "NoteEditor.h"
@@ -13,6 +15,7 @@
 #include "QuickSwitcher.h"
 #include "ReadingView.h"
 #include "SettingsDialog.h"
+#include "TagPicker.h"
 #include "TasksPanel.h"
 #include "core/ai/FrontmatterMerge.h"
 #ifdef MN_HAVE_AI
@@ -31,6 +34,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QBuffer>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -52,6 +56,8 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPageSize>
+#include <QPdfWriter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSaveFile>
@@ -59,6 +65,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTextBlock>
@@ -169,6 +176,10 @@ void MainWindow::buildUi()
     leftTabs_->addTab(tags_, tr("Tags"));
     tasks_ = new TasksPanel(vault_, leftTabs_);
     leftTabs_->addTab(tasks_, tr("Tasks"));
+    calendar_ = new CalendarPanel(vault_, leftTabs_);
+    leftTabs_->addTab(calendar_, tr("Calendar"));
+    connect(calendar_, &CalendarPanel::openRequested, this, [this](const QString& p) { openNote(p); });
+    connect(calendar_, &CalendarPanel::createRequested, this, &MainWindow::openDailyNote);
     auto openFromPanel = [this](const QString& path, int line, const QString& find) {
         openNote(path, line, {}, find);
     };
@@ -212,6 +223,30 @@ void MainWindow::buildUi()
     reading_ = new ReadingView(center_);
     reading_->setVault(vault_);
     center_->addWidget(reading_);
+    home_ = new HomePage(vault_, center_);
+    center_->addWidget(home_);
+    connect(home_, &HomePage::openRequested, this, [this](const QString& p, int line) { openNote(p, line); });
+    connect(home_, &HomePage::tagRequested, this, [this](const QString& tag) {
+        setPaneVisible(0, true);
+        leftTabs_->setCurrentWidget(tags_);
+        tags_->selectTag(tag);
+    });
+    connect(home_, &HomePage::todayRequested, this, &MainWindow::openToday);
+    connect(home_, &HomePage::inboxRequested, this, [this] {
+        if (!vault_->isOpen()) return;
+        const VaultSettings& st = vault_->settings();
+        const QString target = captureTargetPath(st, QDateTime::currentDateTime());
+        if (st.captureToDailyNote) {
+            openToday();
+        } else if (vault_->files().find(target) >= 0 || QFileInfo::exists(vault_->absolutePath(target))) {
+            openNote(target);
+        } else {
+            statusBar()->showMessage(tr("%1 doesn't exist yet.").arg(target), 5000);
+        }
+    });
+    connect(home_, &HomePage::newNoteRequested, this, &MainWindow::newNote);
+    home_->setCaptureHandler(
+        [this](const QString& text, QString* error) { return captureText(text, {}, error); });
     findBar_ = new FindBar(editor_, centerBox);
     cl->addWidget(banner_);
     cl->addWidget(center_, 1);
@@ -321,6 +356,26 @@ void MainWindow::buildMenus()
         if (!note_.path.isEmpty()) promptRename(note_.path, false);
     });
     file->addAction(tr("&Close note"), QKeySequence(u"Ctrl+W"_s), this, &MainWindow::closeNote);
+    QMenu* exportMenu = file->addMenu(tr("E&xport"));
+    auto exportAs = [this](bool pdf) {
+        if (note_.path.isEmpty()) return;
+        QSettings settings;
+        QString dir = settings.value(u"exportFolder"_s).toString();
+        if (dir.isEmpty()) dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        const QString suggested = dir + u'/' + paths::linkName(note_.path) + (pdf ? u".pdf"_s : u".html"_s);
+        const QString file =
+            QFileDialog::getSaveFileName(this, pdf ? tr("Export as PDF") : tr("Export as HTML"), suggested,
+                                         pdf ? tr("PDF (*.pdf)") : tr("HTML (*.html *.htm)"));
+        if (file.isEmpty()) return;
+        settings.setValue(u"exportFolder"_s, QFileInfo(file).absolutePath());
+        QString err;
+        if (!exportNote(file, pdf, &err))
+            QMessageBox::warning(this, tr("Export"), err);
+        else
+            statusBar()->showMessage(tr("Exported to %1").arg(file), 5000);
+    };
+    exportMenu->addAction(tr("As &PDF…"), this, [exportAs] { exportAs(true); });
+    exportMenu->addAction(tr("As &HTML…"), this, [exportAs] { exportAs(false); });
     file->addSeparator();
     file->addAction(tr("Vault &settings…"), QKeySequence(u"Ctrl+,"_s), this, &MainWindow::showSettings);
     file->addSeparator();
@@ -337,6 +392,23 @@ void MainWindow::buildMenus()
     });
     edit->addAction(tr("Insert &template…"), QKeySequence(u"Alt+T"_s), this, &MainWindow::insertTemplate);
     edit->addAction(tr("&Properties…"), QKeySequence(u"Ctrl+T"_s), this, [this] { editProperties(); });
+    edit->addSeparator();
+    auto inEditor = [this](auto fn) {
+        return [this, fn] {
+            if (note_.path.isEmpty() || note_.readOnly) return;
+            if (center_->currentWidget() != editor_)
+                setReadingMode(false), center_->setCurrentWidget(editor_);
+            fn();
+        };
+    };
+    edit->addAction(tr("Insert time&stamp"), QKeySequence(u"Alt+Shift+T"_s), this, inEditor([this] {
+                        editor_->insertTimestamp(
+                            formatMoment(QDateTime::currentDateTime(), vault_->settings().timeFormat));
+                    }));
+    edit->addAction(tr("Toggle chec&kbox"), QKeySequence(u"Ctrl+L"_s), this,
+                    inEditor([this] { editor_->toggleCheckboxes(); }));
+    edit->addAction(tr("Paste as plain te&xt"), QKeySequence(u"Ctrl+Shift+V"_s), this,
+                    inEditor([this] { editor_->pastePlainText(); }));
     QAction* suggest = edit->addAction(tr("Suggest &links while typing"));
     suggest->setCheckable(true);
     suggest->setChecked(editor_->linkSuggestions());
@@ -352,6 +424,7 @@ void MainWindow::buildMenus()
     view->addAction(tr("Toggle &reading view"), QKeySequence(u"Ctrl+E"_s), this, &MainWindow::toggleReading);
     view->addAction(tr("&Appearance…"), this, &MainWindow::showAppearance);
     view->addAction(tr("&Quick switcher…"), QKeySequence(u"Ctrl+O"_s), this, [this] { switcher_->popup(); });
+    view->addAction(tr("&Home"), QKeySequence(u"Ctrl+Shift+H"_s), this, &MainWindow::showHome);
     view->addAction(tr("&Search in vault…"), QKeySequence(u"Ctrl+Shift+F"_s), this, [this] {
         leftTabs_->setCurrentWidget(search_);
         search_->focusSearch(editor_->textCursor().selectedText());
@@ -553,7 +626,10 @@ void MainWindow::restoreLastNote()
     restoredLastNote_ = true;
     if (!note_.path.isEmpty()) return;
     const QString last = QSettings().value(u"lastNote/"_s + IndexStore::vaultId(vault_->root())).toString();
-    if (!last.isEmpty() && QFileInfo::exists(vault_->absolutePath(last))) openNote(last);
+    if (!last.isEmpty() && QFileInfo::exists(vault_->absolutePath(last)))
+        openNote(last);
+    else
+        showHome();
 }
 
 // --- open / save -----------------------------------------------------------------
@@ -639,6 +715,7 @@ bool MainWindow::saveNow()
 bool MainWindow::openNote(const QString& path, int line, const QString& subpath, const QString& findText,
                           bool pushHistory)
 {
+    if (center_->currentWidget() == home_ && !path.isEmpty()) center_->setCurrentWidget(editor_);
     if (path == note_.path && !path.isEmpty()) {
         navigateWithin(line, subpath, findText);
         return true;
@@ -680,13 +757,12 @@ bool MainWindow::openNote(const QString& path, int line, const QString& subpath,
     if (!t.editable()) {
         showBanner(t.error);
     } else if (!exact || !t.roundTrips) {
-        showBanner(tr("Opened read-only: this note contains characters the editor can't preserve, such as "
-                      "old Mac line endings."));
+        showBanner(tr("Read-only: this note has characters the editor can't preserve (CR line endings)."));
     } else {
         const Frontmatter fm = parseFrontmatter(
             t.raw.startsWith("\xEF\xBB\xBF") ? QByteArrayView(t.raw).sliced(3) : QByteArrayView(t.raw));
         if (fm.present && !fm.valid)
-            showBanner(tr("Invalid frontmatter: %1 It will not be modified.").arg(fm.error));
+            showBanner(tr("Invalid frontmatter (%1). It won't be changed.").arg(fm.error));
         else if (t.format.mixedEol)
             showBanner(tr("This note has mixed line endings. Unedited lines keep theirs."));
     }
@@ -762,6 +838,7 @@ void MainWindow::closeNote()
     hideBanner();
     updateTitle();
     updateStatus();
+    if (vault_->isOpen()) showHome();
 }
 
 // --- external changes ------------------------------------------------------------
@@ -919,13 +996,17 @@ void MainWindow::newNote()
     newNoteIn(vault_->settings().newNoteFolder(note_.path));
 }
 
-void MainWindow::newNoteIn(const QString& folder)
+void MainWindow::newNoteIn(const QString& folder, const QStringList& tags)
 {
     if (!vault_->isOpen()) return;
     const VaultSettings& st = vault_->settings();
     const QString path = paths::uniqueVaultPath(vault_->root(), folder, u"Untitled"_s, u".md"_s);
     if (path.isEmpty()) return;
     NewNoteDialog dlg(paths::linkName(path), st, vault_->snapshot().tags, this);
+    if (TagPicker* picker = dlg.tagPicker()) {
+        for (const QString& t : tags)
+            picker->addTag(t);
+    }
     if (dlg.exec() != QDialog::Accepted) return;
     const QString name = dlg.name();
     const QByteArray content = dlg.content();
@@ -1350,6 +1431,100 @@ void MainWindow::openToday()
     editor_->setFocus();
 }
 
+void MainWindow::showHome()
+{
+    if (!vault_->isOpen()) return;
+    findBar_->hide();
+    if (center_->currentWidget() != home_) {
+        saveNow();
+        center_->setCurrentWidget(home_);
+    }
+    home_->refresh();
+}
+
+bool MainWindow::homeShown() const
+{
+    return center_->currentWidget() == home_;
+}
+
+void MainWindow::openDailyNote(QDate date)
+{
+    if (!vault_->isOpen() || !date.isValid()) return;
+    const DailyNoteResult r =
+        ensureDailyNote(vault_->root(), vault_->settings(), QDateTime(date, QTime::currentTime()));
+    if (!r.ok) {
+        QMessageBox::warning(this, tr("Daily note"), r.error);
+        return;
+    }
+    if (r.created) vault_->refresh({r.path});
+    if (r.path != note_.path && !openNote(r.path)) return;
+    if (center_->currentWidget() != editor_) setReadingMode(false);
+    editor_->setFocus();
+    calendar_->refresh();
+}
+
+bool MainWindow::exportNote(const QString& file, bool pdf, QString* error)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (note_.path.isEmpty()) return fail(tr("No note is open."));
+    // Never into .obsidian/ (nor any other hidden folder of the vault).
+    const QString inVault = paths::toVaultPath(vault_->root(), QFileInfo(file).absoluteFilePath());
+    if (!inVault.startsWith(u"../"_s) && !QDir::isAbsolutePath(inVault) &&
+        !checkNewVaultPath(inVault).isEmpty())
+        return fail(tr("Can't export to “%1”: %2").arg(inVault, checkNewVaultPath(inVault)));
+    const QByteArray raw = encodeText(editor_->bufferText(), note_.format, note_.loadedRaw);
+    // Printed pages are light whatever the app's theme is.
+    QPalette light;
+    light.setColor(QPalette::Window, Qt::white);
+    light.setColor(QPalette::Base, Qt::white);
+    light.setColor(QPalette::Text, QColor(0x1c, 0x1c, 0x1c));
+    light.setColor(QPalette::WindowText, QColor(0x1c, 0x1c, 0x1c));
+    const Theme theme = Theme::fromPalette(light);
+    constexpr int kPageWidth = 640; // about an A4 text column, in pixels
+    std::unique_ptr<QTextDocument> doc(
+        reading_->renderDocument(note_.path, raw, theme, kPageWidth, 2.0, nullptr));
+    doc->setMetaInformation(QTextDocument::DocumentTitle, paths::linkName(note_.path));
+    if (pdf) {
+        QPdfWriter writer(file);
+        writer.setTitle(paths::linkName(note_.path));
+        writer.setCreator(u"Markdown Notes"_s);
+        writer.setPageSize(QPageSize(QPageSize::A4));
+        writer.setPageMargins(QMarginsF(18, 18, 18, 18), QPageLayout::Millimeter);
+        doc->setDocumentMargin(0);
+        doc->print(&writer);
+        if (!QFileInfo(file).isFile() || QFileInfo(file).size() == 0)
+            return fail(tr("Couldn't write “%1”.").arg(file));
+        return true;
+    }
+    // A standalone page: images as data URIs, vault links as plain text.
+    QString html = doc->toHtml();
+    static const QRegularExpression resource(uR"re(src="(mn-(?:img|math)://[^"]+)")re"_s);
+    QString out;
+    qsizetype last = 0;
+    for (auto it = resource.globalMatch(html); it.hasNext();) {
+        const QRegularExpressionMatch m = it.next();
+        out += QStringView(html).mid(last, m.capturedStart(1) - last);
+        const QVariant res = doc->resource(QTextDocument::ImageResource, QUrl(m.captured(1)));
+        QImage img = res.value<QImage>();
+        if (img.isNull()) img = res.value<QPixmap>().toImage();
+        QByteArray png;
+        QBuffer buf(&png);
+        buf.open(QIODevice::WriteOnly);
+        img.save(&buf, "PNG");
+        out += u"data:image/png;base64,"_s + QString::fromLatin1(png.toBase64());
+        last = m.capturedEnd(1);
+    }
+    out += QStringView(html).mid(last);
+    static const QRegularExpression appLink(uR"re(\s*href="mn-[a-z]+:[^"]*")re"_s);
+    out.remove(appLink);
+    const WriteResult w = writeFileAtomic(file, out.toUtf8());
+    if (!w.ok) return fail(tr("Couldn't write “%1”: %2").arg(file, w.error));
+    return true;
+}
+
 void MainWindow::editProperties(bool suggest)
 {
     if (note_.path.isEmpty()) return;
@@ -1390,8 +1565,41 @@ void MainWindow::editProperties(bool suggest)
     }
     if (!skipped.isEmpty())
         QMessageBox::warning(this, tr("Properties"),
-                             tr("Some properties are written in a form that can't be changed here: %1")
-                                 .arg(skipped.join(u"; "_s)));
+                             tr("Couldn't change %1. Edit these in the note.").arg(skipped.join(u"; "_s)));
+}
+
+bool MainWindow::captureText(const QString& text, const QList<CaptureFile>& files, QString* error)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (!vault_->isOpen()) return fail(tr("No vault is open."));
+    const VaultSettings& st = vault_->settings();
+    const QDateTime at = QDateTime::currentDateTime();
+    const QString target = captureTargetPath(st, at);
+    const NameInUse nameInUse = [this](const QString& name) {
+        return vault_->files().filesNamed(name) != nullptr;
+    };
+    if (target == note_.path && !note_.readOnly) {
+        // The target is open: append in the editor (undoable) and save.
+        const SavedFiles saved = saveCaptureFiles(vault_->root(), st, target, files, nameInUse);
+        if (!saved.ok) return fail(saved.error);
+        if (!saved.paths.isEmpty()) vault_->refresh(saved.paths);
+        QTextCursor c(editor_->document());
+        c.movePosition(QTextCursor::End);
+        c.beginEditBlock();
+        const QString buffer = editor_->bufferText();
+        if (!buffer.isEmpty() && !buffer.endsWith(u'\n')) c.insertText(u"\n"_s);
+        c.insertText(formatCapture(st, captureTextWithEmbeds(text, saved.links), at) + u'\n');
+        c.endEditBlock();
+        if (!saveNow()) return fail(tr("The note couldn't be saved; your capture is in the editor."));
+        return true;
+    }
+    const CaptureResult r = appendCapture(vault_->root(), st, text, at, files, nameInUse);
+    if (!r.ok) return fail(r.error);
+    vault_->refresh(QStringList(r.attachments) << r.path);
+    return true;
 }
 
 void MainWindow::quickCapture()
@@ -1401,38 +1609,11 @@ void MainWindow::quickCapture()
     const QDateTime now = QDateTime::currentDateTime();
     const QString target = captureTargetPath(st, now);
     CaptureWindow dlg(target, this);
-    connect(&dlg, &CaptureWindow::submitted, &dlg, [this, &dlg, &st, target](const QString& text) {
-        const QDateTime at = QDateTime::currentDateTime();
-        const QList<CaptureFile> files = dlg.files(at);
-        const NameInUse nameInUse = [this](const QString& name) {
-            return vault_->files().filesNamed(name) != nullptr;
-        };
-        if (target == note_.path && !note_.readOnly) {
-            // The target is open: append in the editor (undoable) and save.
-            const SavedFiles saved = saveCaptureFiles(vault_->root(), st, target, files, nameInUse);
-            if (!saved.ok) {
-                dlg.showError(saved.error);
-                return;
-            }
-            if (!saved.paths.isEmpty()) vault_->refresh(saved.paths);
-            QTextCursor c(editor_->document());
-            c.movePosition(QTextCursor::End);
-            c.beginEditBlock();
-            const QString buffer = editor_->bufferText();
-            if (!buffer.isEmpty() && !buffer.endsWith(u'\n')) c.insertText(u"\n"_s);
-            c.insertText(formatCapture(st, captureTextWithEmbeds(text, saved.links), at) + u'\n');
-            c.endEditBlock();
-            if (!saveNow()) {
-                dlg.showError(tr("The note couldn't be saved; your capture is in the editor."));
-                return;
-            }
-        } else {
-            const CaptureResult r = appendCapture(vault_->root(), st, text, at, files, nameInUse);
-            if (!r.ok) {
-                dlg.showError(r.error);
-                return;
-            }
-            vault_->refresh(QStringList(r.attachments) << r.path);
+    connect(&dlg, &CaptureWindow::submitted, &dlg, [this, &dlg, target](const QString& text) {
+        QString error;
+        if (!captureText(text, dlg.files(QDateTime::currentDateTime()), &error)) {
+            dlg.showError(error);
+            return;
         }
         statusBar()->showMessage(tr("Captured to %1").arg(target), 4000);
         dlg.accept();

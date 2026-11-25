@@ -50,6 +50,7 @@ private:
     QTableWidget* properties_;
     QCheckBox* categoriesInTags_;
     QCheckBox* writeEmpty_;
+    QList<QCheckBox*> homeSections_;
     bool propertiesEdited_ = false; // the table was changed: saved as the vault's own list
     bool propertiesReset_ = false;  // back to the default list
 

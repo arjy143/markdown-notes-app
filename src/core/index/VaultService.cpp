@@ -218,6 +218,18 @@ void VaultService::tasks(Callback<std::vector<TaskInfo>> cb)
     query<std::vector<TaskInfo>>([](IndexWorker* w) { return w->tasks(); }, std::move(cb));
 }
 
+void VaultService::datedNotes(const QString& tag, Callback<std::vector<DatedNote>> cb)
+{
+    const QString format = settings_.dailyNoteFormat;
+    query<std::vector<DatedNote>>([tag, format](IndexWorker* w) { return w->datedNotes(tag, format); },
+                                  std::move(cb));
+}
+
+void VaultService::home(const HomeRequest& req, Callback<HomeData> cb)
+{
+    query<HomeData>([req](IndexWorker* w) { return w->home(req); }, std::move(cb));
+}
+
 void VaultService::relatedNotes(const QString& path, Callback<std::vector<RelatedNote>> cb, int limit)
 {
     query<std::vector<RelatedNote>>([path, limit](IndexWorker* w) { return w->relatedNotes(path, limit); },

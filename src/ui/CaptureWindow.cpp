@@ -71,7 +71,7 @@ CaptureWindow::CaptureWindow(const QString& target, QWidget* parent) : QDialog(p
     auto* edit = new CaptureEdit(this);
     edit->onMime = [this](const QMimeData* m) { return insertMime(m); };
     edit_ = edit;
-    edit_->setPlaceholderText(tr("Text to capture, or paste an image"));
+    edit_->setPlaceholderText(tr("Capture text or paste an image"));
     edit_->setTabChangesFocus(true);
     edit_->setFixedHeight(edit_->fontMetrics().lineSpacing() * 3 + 16);
     edit_->installEventFilter(this);
@@ -218,7 +218,7 @@ void CaptureWindow::refreshStrip()
         QPixmap thumb = QPixmap::fromImage(it.sketch.render(scale));
         thumb.setDevicePixelRatio(dpr);
         auto* row = new QListWidgetItem(QIcon(thumb), QString(), strip_);
-        row->setToolTip(tr("Double-click to draw on it. Delete removes it."));
+        row->setToolTip(tr("Double-click to draw · Delete to remove"));
     }
     strip_->setCurrentRow(std::min(current, static_cast<int>(items_.size()) - 1));
     const bool show = !items_.isEmpty();

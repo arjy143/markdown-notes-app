@@ -41,6 +41,7 @@ src/core/    QtCore only (no QtGui/QtWidgets). All vault logic, unit-testable he
   index/       SQLite index (metadata + FTS5), on-disk cache, background indexer
   templates/   template insertion, Moment.js date-format subset
   capture/     quick capture: append to the inbox or today's daily note
+  edit/        smart list editing on lines of text: indent, renumber, checkboxes, timestamps
   tasks/       ticking off and deleting a task from the Tasks view
   settings/    per-vault settings, import from .obsidian/
   ai/          the local-model assistant: prompts, frontmatter merge (in mn_core); AiClient + Assistant (mn_ai, QtNetwork)

@@ -50,6 +50,10 @@ CREATE TABLE blocks(file_id INTEGER NOT NULL, block_id TEXT NOT NULL, start_line
 CREATE INDEX blocks_file ON blocks(file_id);
 CREATE TABLE aliases(file_id INTEGER NOT NULL, alias TEXT NOT NULL);
 CREATE INDEX aliases_file ON aliases(file_id);
+-- Single-value frontmatter properties (status, summary, categories...), for the home page.
+CREATE TABLE props(file_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX props_file ON props(file_id);
+CREATE INDEX props_key ON props(key);
 CREATE TABLE tasks(file_id INTEGER NOT NULL, line INTEGER NOT NULL, done INTEGER NOT NULL, text TEXT NOT NULL,
                    due TEXT NOT NULL);
 CREATE INDEX tasks_file ON tasks(file_id);
@@ -296,6 +300,7 @@ void IndexStore::prepareStatements()
     st_->insertBlock =
         db_.prepare("INSERT INTO blocks(file_id, block_id, start_line, end_line) VALUES (?, ?, ?, ?)");
     st_->insertAlias = db_.prepare("INSERT INTO aliases(file_id, alias) VALUES (?, ?)");
+    st_->insertProp = db_.prepare("INSERT INTO props(file_id, key, value) VALUES (?, ?, ?)");
     st_->insertFts = db_.prepare("INSERT INTO fts(rowid, title, body) VALUES (?, ?, ?)");
     st_->updateStamp = db_.prepare("UPDATE files SET size = ?, mtime = ? WHERE path = ?");
     st_->insertTask = db_.prepare("INSERT INTO tasks(file_id, line, done, text, due) VALUES (?, ?, ?, ?, ?)");
@@ -309,6 +314,7 @@ void IndexStore::prepareStatements()
         "DELETE FROM headings WHERE file_id = ?",
         "DELETE FROM blocks WHERE file_id = ?",
         "DELETE FROM aliases WHERE file_id = ?",
+        "DELETE FROM props WHERE file_id = ?",
         "DELETE FROM fts WHERE rowid = ?",
         "DELETE FROM tasks WHERE file_id = ?",
         "DELETE FROM chunk_fts WHERE rowid IN (SELECT id FROM chunks WHERE file_id = ?)",
@@ -439,6 +445,15 @@ bool IndexStore::putNote(const QString& path, qint64 size, qint64 mtimeMs, const
     for (const QString& a : meta.frontmatter.aliases) {
         alias.bind(1, id).bind(2, a);
         alias.exec();
+    }
+    constexpr qsizetype kMaxPropValue = 500;
+    sql::Statement& prop = st_->insertProp;
+    for (const FrontmatterField& f : meta.frontmatter.fields) {
+        if (f.isList || f.complex || f.key == u"tags" || f.key == u"tag" || f.key == u"aliases" ||
+            f.key == u"alias")
+            continue;
+        prop.bind(1, id).bind(2, f.key).bind(3, f.value.left(kMaxPropValue));
+        prop.exec();
     }
     sql::Statement& task = st_->insertTask;
     for (const TaskItem& t : meta.tasks) {
@@ -1067,6 +1082,70 @@ QStringList IndexStore::ftsCandidates(const QString& phrase, int limit)
     s.bind(1, u"body:"_s + quoteFtsTerm(phrase)).bind(2, limit);
     while (s.step())
         out.append(s.text(0));
+    return out;
+}
+
+std::vector<std::pair<QString, QString>> IndexStore::filesWithProperty(const QString& key)
+{
+    std::vector<std::pair<QString, QString>> out;
+    sql::Statement s = db_.prepare("SELECT f.path, p.value FROM props p JOIN files f ON f.id = p.file_id "
+                                   "WHERE p.key = ? AND p.value != '' "
+                                   "ORDER BY f.path");
+    s.bind(1, key);
+    while (s.step())
+        out.emplace_back(s.text(0), s.text(1));
+    return out;
+}
+
+QHash<QString, QHash<QString, QString>> IndexStore::properties(const QStringList& keys)
+{
+    QHash<QString, QHash<QString, QString>> out;
+    sql::Statement s = db_.prepare(
+        "SELECT f.path, p.key, p.value FROM props p JOIN files f ON f.id = p.file_id WHERE p.value != ''");
+    while (s.step()) {
+        const QString key = s.text(1);
+        if (keys.contains(key)) out[s.text(0)].insert(key, s.text(2));
+    }
+    return out;
+}
+
+QHash<QString, qint64> IndexStore::noteTimes()
+{
+    QHash<QString, qint64> out;
+    sql::Statement s = db_.prepare("SELECT path, mtime FROM files WHERE kind = ?");
+    s.bind(1, static_cast<int>(FileKind::Note));
+    while (s.step())
+        out.insert(s.text(0), s.int64(1));
+    return out;
+}
+
+std::vector<StoredLink> IndexStore::linksFrom(const QString& path)
+{
+    std::vector<StoredLink> out;
+    sql::Statement s = db_.prepare(
+        "SELECT l.linkpath, l.subpath, l.line, l.embed FROM links l JOIN files f ON f.id = l.file_id "
+        "WHERE f.path = ? AND l.linkpath != ''");
+    s.bind(1, path);
+    while (s.step())
+        out.push_back({path, s.text(0), s.text(1), s.int32(2), s.int32(3) != 0});
+    return out;
+}
+
+QStringList IndexStore::coTags(const QString& tag, const QStringList& exclude, int limit)
+{
+    QStringList excluded;
+    for (const QString& e : exclude)
+        excluded.append(e.toCaseFolded());
+    excluded.append(tag.toCaseFolded());
+    sql::Statement s = db_.prepare(
+        "SELECT t2.tag_key, max(t2.tag), count(DISTINCT t2.file_id) AS n FROM tags t1 "
+        "JOIN tags t2 ON t2.file_id = t1.file_id WHERE t1.tag_key = ? GROUP BY t2.tag_key ORDER BY n DESC, "
+        "t2.tag_key LIMIT ?");
+    s.bind(1, tag.toCaseFolded()).bind(2, limit + static_cast<int>(excluded.size()));
+    QStringList out;
+    while (s.step() && out.size() < limit) {
+        if (!excluded.contains(s.text(0))) out.append(s.text(1));
+    }
     return out;
 }
 

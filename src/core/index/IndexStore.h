@@ -37,7 +37,7 @@ struct StoredLink {
 
 class IndexStore {
 public:
-    static constexpr int kSchemaVersion = 5;
+    static constexpr int kSchemaVersion = 6;
     static constexpr int kEmbeddingsVersion = 2;
 
     static QString vaultId(const QString& vaultRoot);
@@ -77,6 +77,14 @@ public:
     QStringList notesLinkingToNames(const QStringList& keys);
     QHash<QString, QStringList> allAliases();
     std::vector<TagCount> tagCounts();
+    // Notes whose single-value property `key` is set, with its value.
+    std::vector<std::pair<QString, QString>> filesWithProperty(const QString& key);
+    // Set values of these properties, per note.
+    QHash<QString, QHash<QString, QString>> properties(const QStringList& keys);
+    QHash<QString, qint64> noteTimes(); // note path -> mtime (ms)
+    std::vector<StoredLink> linksFrom(const QString& path);
+    // Tags most often found with `tag`, apart from `exclude`, in their usual spelling.
+    QStringList coTags(const QString& tag, const QStringList& exclude, int limit);
     QStringList filesWithTag(const QString& tagKey);
     std::vector<HeadingInfo> headings(const QString& path);
     std::vector<BlockInfo> blocks(const QString& path);
@@ -131,8 +139,8 @@ private:
     // Prepared once per connection: indexing runs these tens of thousands of times.
     struct Statements {
         sql::Statement selectId, insertFile, insertLink, insertTag, insertHeading, insertBlock, insertAlias,
-            insertFts, updateStamp, insertTask, docFreq, insertChunk, insertChunkFts;
-        sql::Statement deletes[10];
+            insertProp, insertFts, updateStamp, insertTask, docFreq, insertChunk, insertChunkFts;
+        sql::Statement deletes[11];
     };
     std::unique_ptr<Statements> st_;
 };

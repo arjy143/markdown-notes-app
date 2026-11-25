@@ -65,6 +65,8 @@ public:
     void filesWithTag(const QString& tag, Callback<QStringList> cb);
     void unresolvedLinks(Callback<std::vector<UnresolvedLink>> cb);
     void tasks(Callback<std::vector<TaskInfo>> cb);
+    void datedNotes(const QString& tag, Callback<std::vector<DatedNote>> cb);
+    void home(const HomeRequest& req, Callback<HomeData> cb);
     void relatedNotes(const QString& path, Callback<std::vector<RelatedNote>> cb, int limit = 5);
     void healthReport(Callback<HealthReport> cb);
     void noteTags(Callback<std::vector<NoteTags>> cb);

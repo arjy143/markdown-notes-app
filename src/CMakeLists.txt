@@ -21,6 +21,7 @@ add_library(mn_core STATIC
     core/index/VaultService.cpp core/index/VaultService.h
     core/templates/Templates.cpp core/templates/Templates.h
     core/capture/Capture.cpp core/capture/Capture.h
+    core/edit/ListEdit.cpp core/edit/ListEdit.h
     core/tasks/TaskEdit.cpp core/tasks/TaskEdit.h
     core/settings/VaultSettings.cpp core/settings/VaultSettings.h
     core/ai/FrontmatterMerge.cpp core/ai/FrontmatterMerge.h

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Appearance.h"
+#include "core/capture/Capture.h"
 #include "core/index/IndexTypes.h"
 #include "core/tasks/TaskEdit.h"
 #include "core/vault/TextFile.h"
@@ -113,7 +114,7 @@ private:
     void newNote();
     // A new note in `folder`: asks for the name and tags first (and the categories,
     // when the vault settings have category properties); they become its frontmatter.
-    void newNoteIn(const QString& folder);
+    void newNoteIn(const QString& folder, const QStringList& tags = {});
     void newFolder(const QString& parentFolder);
     void deletePath(const QString& path, bool folder);
     void promptRename(const QString& path, bool folder);
@@ -134,6 +135,16 @@ public:
     void quickCapture();
     // Opens today's daily note, creating it (with the daily-note tags) first.
     void openToday();
+    // The home page (View › Home); also shown when no note is open.
+    void showHome();
+    bool homeShown() const;
+    // Appends `text` (and `files`) to the capture note: in the editor when that note
+    // is open, else on disk. Returns false with a reason on failure.
+    bool captureText(const QString& text, const QList<CaptureFile>& files, QString* error);
+    // Opens the daily note for `date`, creating it (tagged) first.
+    void openDailyNote(QDate date);
+    // File › Export: the open note as rendered in the reading view, light theme.
+    bool exportNote(const QString& file, bool pdf, QString* error = nullptr);
     // Ctrl+T: the open note's properties as a form; applied to its frontmatter as one
     // undoable edit. With `suggest`, the assistant fills the empty fields first.
     void editProperties(bool suggest = false);
@@ -168,6 +179,8 @@ private:
     QStackedWidget* center_ = nullptr;
     QSplitter* splitter_ = nullptr;
     QTabWidget* leftTabs_ = nullptr;
+    class CalendarPanel* calendar_ = nullptr;
+    class HomePage* home_ = nullptr;
     QTreeView* tree_ = nullptr;
     FileTreeModel* treeModel_ = nullptr;
     SearchPanel* search_ = nullptr;

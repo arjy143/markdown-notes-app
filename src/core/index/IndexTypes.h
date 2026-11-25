@@ -3,6 +3,8 @@
 #include "core/links/FileIndex.h"
 #include "core/vault/FileTypes.h"
 
+#include <QDate>
+#include <QDateTime>
 #include <QHash>
 #include <QList>
 #include <QMetaType>
@@ -98,6 +100,57 @@ struct TaskInfo {
     bool done = false;
     QString text;
     QString due; // "YYYY-MM-DD" or empty
+};
+
+// A note with a date (calendar): from its file name, else its created / date property.
+struct DatedNote {
+    QString path;
+    QDate date;
+};
+
+// A note on the home page: an active note's tile, or a recently edited note.
+struct NoteCard {
+    QString path;
+    QString title;
+    QString summary;
+    QString status;
+    QDateTime modified;  // the latest change among the note and its linked notes
+    int linkedNotes = 0; // notes it links to or that link to it (a hub's project files)
+    int openTasks = 0;   // in the note and its linked notes
+    int doneTasks = 0;
+};
+
+struct CategoryOverview {
+    QString tag;
+    int notes = 0;
+    QStringList topTags; // the tags most often found with it
+};
+
+struct AttentionNote {
+    QString path;
+    QStringList missing; // properties that aren't set
+};
+
+struct HomeRequest {
+    QDate today;
+    QStringList finishedStatuses; // statuses that mean "not active" (done, archived...)
+    QStringList categories;       // category tags
+    QStringList requiredKeys;     // properties a processed note has set
+    QString journalTag;
+    QString dailyFormat;
+    QString templatesFolder;
+    int limit = 8;
+};
+
+// Everything the home page shows, gathered in one pass on the worker thread.
+struct HomeData {
+    std::vector<NoteCard> active; // notes with an unfinished status, most recently changed first
+    std::vector<NoteCard> recent; // most recently edited notes
+    std::vector<TaskInfo> due;    // open tasks with a due date, soonest first
+    std::vector<CategoryOverview> categories;
+    std::vector<AttentionNote> attention; // most recent first
+    int attentionTotal = 0;
+    std::vector<DatedNote> onThisDay; // journal notes from this day in earlier months and years
 };
 
 struct RelatedNote {

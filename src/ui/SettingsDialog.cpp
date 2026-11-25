@@ -125,8 +125,7 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     // Properties and tags: the note form (Ctrl+N, Ctrl+T) and the category scheme.
     auto* propsPage = new QWidget(tabs);
     auto* pl = new QVBoxLayout(propsPage);
-    auto* intro =
-        new QLabel(tr("The note form (Ctrl+N, Ctrl+T) offers these properties, in this order."), propsPage);
+    auto* intro = new QLabel(tr("Properties in the note form (Ctrl+N, Ctrl+T), in order:"), propsPage);
     intro->setWordWrap(true);
     pl->addWidget(intro);
     properties_ = new QTableWidget(0, 3, propsPage);
@@ -179,11 +178,11 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     connect(properties_, &QTableWidget::itemChanged, this, [this] { propertiesEdited_ = true; });
 
     auto* tagForm = new QFormLayout;
-    categoriesInTags_ = new QCheckBox(tr("Add chosen categories to the tags too"), propsPage);
+    categoriesInTags_ = new QCheckBox(tr("Also add categories to tags"), propsPage);
     categoriesInTags_->setChecked(s.categoriesInTags);
-    writeEmpty_ = new QCheckBox(tr("Write properties left blank as empty"), propsPage);
+    writeEmpty_ = new QCheckBox(tr("Write blank fields as empty properties"), propsPage);
     writeEmpty_->setChecked(s.writeEmptyProperties);
-    writeEmpty_->setToolTip(tr("Every note then has the same properties, e.g. \"status:\" with no value"));
+    writeEmpty_->setToolTip(tr("Gives every note the same keys, e.g. “status:”"));
     tagForm->addRow(QString(), categoriesInTags_);
     tagForm->addRow(QString(), writeEmpty_);
     tagForm->addRow(tr("Properties that count as tags:"), tagProperties_);
@@ -192,6 +191,33 @@ SettingsDialog::SettingsDialog(const VaultSettings& s, VaultService* vault, QWid
     tagForm->addRow(QString(), detect);
     pl->addLayout(tagForm);
     tabs->addTab(propsPage, tr("Properties and tags"));
+
+    auto* homePage = new QWidget(tabs);
+    auto* hl = new QVBoxLayout(homePage);
+    auto* homeIntro = new QLabel(tr("Home page sections:"), homePage);
+    homeIntro->setWordWrap(true);
+    hl->addWidget(homeIntro);
+    const QStringList names{tr("Today"),           tr("Active notes"), tr("Tasks due"),
+                            tr("Recently edited"), tr("Categories"),   tr("Missing properties"),
+                            tr("On this day")};
+    const QStringList tips{tr("Today's note and a capture box"),
+                           tr("Notes with an unfinished status"),
+                           tr("Open tasks with a due date"),
+                           QString(),
+                           tr("Note counts and main topics per category"),
+                           tr("Notes without categories or a summary"),
+                           tr("Journal notes from this date in past months and years")};
+    const QStringList ids = VaultSettings::allHomeSections();
+    for (qsizetype i = 0; i < ids.size(); ++i) {
+        auto* box = new QCheckBox(names.value(i), homePage);
+        box->setProperty("section", ids[i]);
+        box->setChecked(s.homeSections.contains(ids[i]));
+        box->setToolTip(tips.value(i));
+        hl->addWidget(box);
+        homeSections_.append(box);
+    }
+    hl->addStretch(1);
+    tabs->addTab(homePage, tr("Home"));
     lay->addWidget(tabs);
     fillProperties(s.formProperties());
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -242,6 +268,10 @@ VaultSettings SettingsDialog::settings() const
     s.minCategoryTags = minCategories_->value();
     s.categoriesInTags = categoriesInTags_->isChecked();
     s.writeEmptyProperties = writeEmpty_->isChecked();
+    s.homeSections.clear();
+    for (const QCheckBox* box : homeSections_) {
+        if (box->isChecked()) s.homeSections.append(box->property("section").toString());
+    }
     if (propertiesEdited_)
         s.noteProperties = tableProperties();
     else if (propertiesReset_)
@@ -268,7 +298,7 @@ void SettingsDialog::addPropertyRow(const PropertySpec& spec)
         static_cast<int>(std::find(std::begin(kKinds), std::end(kKinds), spec.kind) - std::begin(kKinds)));
     properties_->setCellWidget(row, 1, kind);
     auto* options = new QTableWidgetItem(spec.options.join(u", "_s));
-    options->setToolTip(tr("For Choice: the values to choose from. Categories use the category tags."));
+    options->setToolTip(tr("Options for Choice properties"));
     properties_->setItem(row, 2, options);
     connect(kind, &QComboBox::currentIndexChanged, this, [this] { propertiesEdited_ = true; });
 }
