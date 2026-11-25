@@ -3,13 +3,11 @@
 #include "QuickSwitcher.h"
 #include "core/ai/FrontmatterMerge.h"
 
-#include <QDialogButtonBox>
 #include <QHash>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QPushButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -28,15 +26,6 @@ bool containsTag(const QStringList& list, const QString& tag)
 {
     return std::any_of(list.begin(), list.end(),
                        [&](const QString& t) { return t.compare(tag, Qt::CaseInsensitive) == 0; });
-}
-
-QStringList minus(const QStringList& a, const QStringList& b)
-{
-    QStringList out;
-    for (const QString& t : a) {
-        if (!containsTag(b, t)) out.append(t);
-    }
-    return out;
 }
 
 } // namespace
@@ -231,41 +220,6 @@ bool TagPicker::eventFilter(QObject* o, QEvent* e)
         }
     }
     return QWidget::eventFilter(o, e);
-}
-
-// --- NoteTagsDialog --------------------------------------------------------------
-
-NoteTagsDialog::NoteTagsDialog(const QString& noteName, const QStringList& tags,
-                               const std::vector<TagCount>& vaultTags, QWidget* parent)
-    : QDialog(parent), original_(tags)
-{
-    setWindowTitle(tr("Tags: %1").arg(noteName));
-    auto* lay = new QVBoxLayout(this);
-    picker_ = new TagPicker(this);
-    picker_->setVaultTags(vaultTags);
-    picker_->setTags(tags);
-    lay->addWidget(picker_, 1);
-    auto* hint = new QLabel(tr("↵ add   ↵ on empty search: done   ⌫ remove last   esc cancel"), this);
-    hint->setEnabled(false);
-    lay->addWidget(hint);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
-    buttons->addButton(tr("Done"), QDialogButtonBox::AcceptRole)->setAutoDefault(false);
-    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(picker_, &TagPicker::submitted, this, &QDialog::accept);
-    lay->addWidget(buttons);
-    picker_->searchBox()->setFocus();
-    resize(420, 440);
-}
-
-QStringList NoteTagsDialog::added() const
-{
-    return minus(picker_->tags(), original_);
-}
-
-QStringList NoteTagsDialog::removed() const
-{
-    return minus(original_, picker_->tags());
 }
 
 } // namespace mn::ui

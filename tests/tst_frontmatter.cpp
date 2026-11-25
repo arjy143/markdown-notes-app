@@ -105,6 +105,134 @@ private Q_SLOTS:
         QVERIFY(n.ok && !n.changed);
     }
 
+    void propertiesAreSetInPlace_data()
+    {
+        QTest::addColumn<QString>("before");
+        QTest::addColumn<QString>("key");
+        QTest::addColumn<QStringList>("values");
+        QTest::addColumn<bool>("list");
+        QTest::addColumn<bool>("keepEmpty");
+        QTest::addColumn<QString>("after");
+        const QString note =
+            u"---\nprimary: tech # main\nsummary: \"Old: text\"\naliases:\n    - A\n    - B\n"
+            "sources: [x, y]\n---\nBody\n"_s;
+        QTest::newRow("change a scalar")
+            << note << u"primary"_s << QStringList{u"science"_s} << false << false
+            << u"---\nprimary: science\nsummary: \"Old: text\"\naliases:\n    - A\n"
+               "    - B\nsources: [x, y]\n---\nBody\n"_s;
+        QTest::newRow("same value: untouched")
+            << note << u"summary"_s << QStringList{u"Old: text"_s} << false << false << note;
+        QTest::newRow("block list keeps its indent")
+            << note << u"aliases"_s << QStringList{u"A"_s, u"C"_s} << true << false
+            << u"---\nprimary: tech # main\nsummary: \"Old: text\"\naliases:\n    - A\n    - C\nsources: [x, "
+               u"y]\n"
+               "---\nBody\n"_s;
+        QTest::newRow("flow list stays flow")
+            << note << u"sources"_s << QStringList{u"https://a.b/c?d=1"_s, u"Book, 2nd ed"_s} << true << false
+            << u"---\nprimary: tech # main\nsummary: \"Old: text\"\naliases:\n    - A\n    - B\n"
+               "sources: [\"https://a.b/c?d=1\", \"Book, 2nd ed\"]\n---\nBody\n"_s;
+        QTest::newRow("cleared, kept empty")
+            << note << u"aliases"_s << QStringList{} << true << true
+            << u"---\nprimary: tech # main\nsummary: \"Old: text\"\naliases:\nsources: [x, y]\n---\nBody\n"_s;
+        QTest::newRow("cleared, removed")
+            << note << u"aliases"_s << QStringList{} << true << false
+            << u"---\nprimary: tech # main\nsummary: \"Old: text\"\nsources: [x, y]\n---\nBody\n"_s;
+        QTest::newRow("new, at the end")
+            << note << u"status"_s << QStringList{u"draft"_s} << false << false
+            << u"---\nprimary: tech # main\nsummary: \"Old: text\"\naliases:\n    - A\n"
+               "    - B\nsources: [x, y]\nstatus: draft\n---\nBody\n"_s;
+        QTest::newRow("new, empty") << u"---\nx: 1\n---\n"_s << u"status"_s << QStringList{} << false << true
+                                    << u"---\nx: 1\nstatus:\n---\n"_s;
+        QTest::newRow("new, empty, not kept") << u"---\nx: 1\n---\n"_s << u"status"_s << QStringList{}
+                                              << false << false << u"---\nx: 1\n---\n"_s;
+        QTest::newRow("empty value filled")
+            << u"---\nstatus:\n---\n"_s << u"status"_s << QStringList{u"done"_s} << false << true
+            << u"---\nstatus: done\n---\n"_s;
+        QTest::newRow("scalar becomes a list")
+            << u"---\nsources: one\n---\n"_s << u"sources"_s << QStringList{u"one"_s, u"two"_s} << true
+            << false << u"---\nsources:\n  - one\n  - two\n---\n"_s;
+        QTest::newRow("no frontmatter yet") << u"Body\n"_s << u"status"_s << QStringList{u"draft"_s} << false
+                                            << false << u"---\nstatus: draft\n---\nBody\n"_s;
+        QTest::newRow("no frontmatter, nothing to write")
+            << u"Body\n"_s << u"status"_s << QStringList{} << false << false << u"Body\n"_s;
+        QTest::newRow("windows line endings")
+            << u"---\r\nstatus: draft\r\n---\r\nBody\r\n"_s << u"status"_s << QStringList{u"done"_s} << false
+            << false << u"---\r\nstatus: done\r\n---\r\nBody\r\n"_s;
+    }
+    void propertiesAreSetInPlace()
+    {
+        QFETCH(QString, before);
+        QFETCH(QString, key);
+        QFETCH(QStringList, values);
+        QFETCH(bool, list);
+        QFETCH(bool, keepEmpty);
+        QFETCH(QString, after);
+        FrontmatterPatch p;
+        p.set.append({key, values, list, keepEmpty});
+        const FrontmatterEdit e = planFrontmatterEdit(before, p);
+        QVERIFY2(e.ok, qPrintable(e.error));
+        QCOMPARE(e.changed, before != after);
+        QCOMPARE(applyFrontmatterEdit(before, e), after);
+        QVERIFY(parseFrontmatter(after.toUtf8()).valid);
+    }
+
+    void aWholeFormInOneEdit()
+    {
+        // A new note: every property in form order, blanks kept empty.
+        FrontmatterPatch p;
+        p.set = {{u"primary"_s, {u"tech"_s}, false, true},
+                 {u"secondary"_s, {}, false, true},
+                 {u"tags"_s, {u"tech"_s, u"rust"_s}, true, true},
+                 {u"aliases"_s, {}, true, true},
+                 {u"summary"_s, {u"About: ownership"_s}, false, true},
+                 {u"created"_s, {u"2026-11-25"_s}, false, true}};
+        QCOMPARE(applyFrontmatterEdit(QString(), planFrontmatterEdit(QString(), p)),
+                 u"---\nprimary: tech\nsecondary:\ntags:\n  - tech\n  - rust\naliases:\nsummary: \"About: "
+                 u"ownership\"\n"
+                 "created: 2026-11-25\n---\n"_s);
+        // An existing note: changes, tag edits and new keys together; the rest untouched.
+        const QString note = u"---\nprimary: tech\ntertiary: meta\ntags: [tech, old]\n---\nBody\n"_s;
+        p = {};
+        p.set = {{u"primary"_s, {u"science"_s}, false, true}, {u"status"_s, {}, false, true}};
+        p.removeTags = {u"old"_s, u"tech"_s};
+        p.addTags = {u"science"_s};
+        const FrontmatterEdit e = planFrontmatterEdit(note, p);
+        QVERIFY(e.ok && e.changed);
+        QCOMPARE(e.replaceLines, 5);
+        QCOMPARE(applyFrontmatterEdit(note, e),
+                 u"---\nprimary: science\ntertiary: meta\ntags: [science]\nstatus:\n---\nBody\n"_s);
+        // Nested values aren't guessed at.
+        const QString nested = u"---\nsummary: |\n  long\n  text\n---\n"_s;
+        p = {};
+        p.set = {{u"summary"_s, {u"short"_s}, false, false}};
+        const FrontmatterEdit n = planFrontmatterEdit(nested, p);
+        QVERIFY(n.ok && !n.changed);
+        QCOMPARE(n.skipped.size(), 1);
+    }
+
+    void plainValuesReadBackTheSame()
+    {
+        const QStringList values{u"https://example.com/a?b=1&c=2#top"_s,
+                                 u"C++ notes"_s,
+                                 u"Rust, 2nd ed."_s,
+                                 u"Note: colon"_s,
+                                 u"a #b"_s,
+                                 u"true"_s,
+                                 u"42"_s,
+                                 u"2026-11-25"_s,
+                                 u"ends:"_s,
+                                 u"\"quoted\""_s,
+                                 u"- dash"_s};
+        for (const QString& v : values) {
+            const QString text = u"---\nk: "_s + yamlScalar(v) + u"\n---\n"_s;
+            const Frontmatter fm = parseFrontmatter(text.toUtf8());
+            QVERIFY2(fm.valid, qPrintable(text));
+            QCOMPARE(fm.field(u"k")->value, v);
+        }
+        QCOMPARE(yamlScalar(u"https://example.com/x"_s), u"https://example.com/x"_s);
+        QCOMPARE(yamlScalar(u"Note: colon"_s), u"\"Note: colon\""_s);
+    }
+
     void lookAlikeTags()
     {
         QCOMPARE(tagLookAlikeKey(u"#Machine-Learning"), tagLookAlikeKey(u"machine_learnings"));

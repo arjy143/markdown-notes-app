@@ -1,12 +1,10 @@
 #pragma once
 
 #include "core/index/IndexTypes.h"
+#include "core/settings/VaultSettings.h"
 
 #include <QByteArray>
 #include <QDialog>
-#include <QList>
-#include <QPair>
-#include <QStringList>
 
 #include <vector>
 
@@ -15,29 +13,28 @@ class QLineEdit;
 
 namespace mn::ui {
 
+class PropertiesForm;
 class TagPicker;
 
-// New note (Ctrl+N): a name, the note's tags (picked from the vault's tags), and,
-// for vaults with category properties (vault settings: tag properties such as
-// primary / secondary, with the category tags as their values), a dropdown per
-// property. The choices are written as the note's frontmatter.
+// New note (Ctrl+N): a name and the note's properties, as a form built from the
+// vault's property list. Dates start as today and a link on the clipboard as the
+// first source; blank fields are written empty when the vault settings say so.
 class NewNoteDialog : public QDialog {
     Q_OBJECT
 public:
-    NewNoteDialog(const QString& suggestedName, const QStringList& properties, const QStringList& categories,
+    NewNoteDialog(const QString& suggestedName, const VaultSettings& settings,
                   const std::vector<TagCount>& vaultTags = {}, QWidget* parent = nullptr);
     QString name() const;
-    QList<QPair<QString, QString>> values() const; // property, category; unset ones left out
-    QByteArray content() const;                    // the new note's text: frontmatter, or empty
+    QByteArray content() const; // the new note's text: frontmatter, or empty
 
-    QComboBox* combo(int i) const { return combos_.value(i); }
-    TagPicker* tagPicker() const { return tags_; }
+    PropertiesForm* form() const { return form_; }
+    QComboBox* combo(int i) const; // the i-th category dropdown
+    TagPicker* tagPicker() const;
 
 private:
     QLineEdit* name_;
-    QStringList properties_;
-    QList<QComboBox*> combos_;
-    TagPicker* tags_;
+    PropertiesForm* form_;
+    bool writeEmpty_;
 };
 
 } // namespace mn::ui

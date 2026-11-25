@@ -8,6 +8,7 @@ class QLineEdit;
 class QComboBox;
 class QCheckBox;
 class QSpinBox;
+class QTableWidget;
 
 namespace mn {
 class VaultService;
@@ -46,6 +47,15 @@ private:
     QLineEdit* tagProperties_;
     QLineEdit* categories_;
     QSpinBox* minCategories_;
+    QTableWidget* properties_;
+    QCheckBox* categoriesInTags_;
+    QCheckBox* writeEmpty_;
+    bool propertiesEdited_ = false; // the table was changed: saved as the vault's own list
+    bool propertiesReset_ = false;  // back to the default list
+
+    void fillProperties(const QList<PropertySpec>& specs);
+    void addPropertyRow(const PropertySpec& spec);
+    QList<PropertySpec> tableProperties() const;
 };
 
 } // namespace mn::ui

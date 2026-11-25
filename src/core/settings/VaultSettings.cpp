@@ -9,6 +9,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <algorithm>
+
 using namespace Qt::StringLiterals;
 
 namespace mn {
@@ -34,6 +36,35 @@ QString styleName(LinkStyle s)
         break;
     }
     return u"shortest"_s;
+}
+
+QString kindName(PropertyKind k)
+{
+    switch (k) {
+    case PropertyKind::Category:
+        return u"category"_s;
+    case PropertyKind::Choice:
+        return u"choice"_s;
+    case PropertyKind::Date:
+        return u"date"_s;
+    case PropertyKind::Tags:
+        return u"tags"_s;
+    case PropertyKind::List:
+        return u"list"_s;
+    case PropertyKind::Text:
+        break;
+    }
+    return u"text"_s;
+}
+
+PropertyKind parseKind(const QString& s)
+{
+    if (s == u"category") return PropertyKind::Category;
+    if (s == u"choice") return PropertyKind::Choice;
+    if (s == u"date") return PropertyKind::Date;
+    if (s == u"tags") return PropertyKind::Tags;
+    if (s == u"list") return PropertyKind::List;
+    return PropertyKind::Text;
 }
 
 LinkStyle parseStyle(const QString& s)
@@ -105,6 +136,25 @@ void applyJson(VaultSettings& s, const QJsonObject& o)
     if (o.contains(u"categoryTags"_s)) s.categoryTags = stringList(u"categoryTags"_s);
     if (o.contains(u"pinnedTags"_s)) s.pinnedTags = stringList(u"pinnedTags"_s);
     if (o.contains(u"dailyNoteTags"_s)) s.dailyNoteTags = stringList(u"dailyNoteTags"_s);
+    if (o.contains(u"noteProperties"_s)) {
+        s.noteProperties.clear();
+        for (const auto& v : o.value(u"noteProperties"_s).toArray()) {
+            const QJsonObject p = v.toObject();
+            const QString key = p.value(u"key"_s).toString().trimmed();
+            const bool dup = std::any_of(s.noteProperties.begin(), s.noteProperties.end(),
+                                         [&](const PropertySpec& q) { return q.key == key; });
+            QStringList options;
+            for (const auto& o2 : p.value(u"options"_s).toArray()) {
+                const QString opt = o2.toString().trimmed();
+                if (!opt.isEmpty() && !options.contains(opt)) options.append(opt);
+            }
+            if (!key.isEmpty() && !dup)
+                s.noteProperties.append({key, parseKind(p.value(u"kind"_s).toString()), options});
+        }
+    }
+    if (o.contains(u"categoriesInTags"_s)) s.categoriesInTags = o.value(u"categoriesInTags"_s).toBool(true);
+    if (o.contains(u"writeEmptyProperties"_s))
+        s.writeEmptyProperties = o.value(u"writeEmptyProperties"_s).toBool(true);
     if (o.contains(u"minCategoryTags"_s))
         s.minCategoryTags = std::clamp(o.value(u"minCategoryTags"_s).toInt(2), 0, 20);
     if (o.contains(u"templatesFolder"_s)) s.templatesFolder = o.value(u"templatesFolder"_s).toString();
@@ -113,6 +163,30 @@ void applyJson(VaultSettings& s, const QJsonObject& o)
 }
 
 } // namespace
+
+QList<PropertySpec> VaultSettings::formProperties() const
+{
+    if (!noteProperties.isEmpty()) return noteProperties;
+    QList<PropertySpec> out;
+    for (const QString& p : tagProperties)
+        out.append({p, PropertyKind::Category, {}});
+    out.append({u"tags"_s, PropertyKind::Tags, {}});
+    out.append({u"aliases"_s, PropertyKind::List, {}});
+    out.append({u"status"_s, PropertyKind::Choice, {u"draft"_s, u"active"_s, u"done"_s}});
+    out.append({u"summary"_s, PropertyKind::Text, {}});
+    out.append({u"sources"_s, PropertyKind::List, {}});
+    out.append({u"created"_s, PropertyKind::Date, {}});
+    return out;
+}
+
+QStringList VaultSettings::categoryProperties() const
+{
+    QStringList out;
+    for (const PropertySpec& p : formProperties()) {
+        if (p.kind == PropertyKind::Category) out.append(p.key);
+    }
+    return out;
+}
 
 QString VaultSettings::attachmentFolderFor(QStringView notePath) const
 {
@@ -204,6 +278,15 @@ bool saveVaultSettings(const QString& vaultRoot, const VaultSettings& s, QString
     o.insert(u"dailyNoteFormat"_s, s.dailyNoteFormat);
     o.insert(u"dailyNoteTemplate"_s, s.dailyNoteTemplate);
     o.insert(u"dailyNoteTags"_s, QJsonArray::fromStringList(s.dailyNoteTags));
+    QJsonArray props;
+    for (const PropertySpec& p : s.noteProperties) {
+        QJsonObject po{{u"key"_s, p.key}, {u"kind"_s, kindName(p.kind)}};
+        if (!p.options.isEmpty()) po.insert(u"options"_s, QJsonArray::fromStringList(p.options));
+        props.append(po);
+    }
+    o.insert(u"noteProperties"_s, props);
+    o.insert(u"categoriesInTags"_s, s.categoriesInTags);
+    o.insert(u"writeEmptyProperties"_s, s.writeEmptyProperties);
     o.insert(u"tagProperties"_s, QJsonArray::fromStringList(s.tagProperties));
     o.insert(u"categoryTags"_s, QJsonArray::fromStringList(s.categoryTags));
     o.insert(u"minCategoryTags"_s, s.minCategoryTags);

@@ -1,11 +1,12 @@
 #include "NewNoteDialog.h"
 
+#include "PropertiesForm.h"
 #include "TagPicker.h"
-#include "core/ai/FrontmatterMerge.h"
 
-#include <QComboBox>
+#include <QClipboard>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -14,38 +15,20 @@ using namespace Qt::StringLiterals;
 
 namespace mn::ui {
 
-NewNoteDialog::NewNoteDialog(const QString& suggestedName, const QStringList& properties,
-                             const QStringList& categories, const std::vector<TagCount>& vaultTags,
-                             QWidget* parent)
-    : QDialog(parent), properties_(properties)
+NewNoteDialog::NewNoteDialog(const QString& suggestedName, const VaultSettings& settings,
+                             const std::vector<TagCount>& vaultTags, QWidget* parent)
+    : QDialog(parent), writeEmpty_(settings.writeEmptyProperties)
 {
     setWindowTitle(tr("New note"));
     auto* lay = new QVBoxLayout(this);
-    auto* form = new QFormLayout;
+    auto* top = new QFormLayout;
     name_ = new QLineEdit(suggestedName, this);
     name_->selectAll();
-    form->addRow(tr("Name:"), name_);
-    for (const QString& p : properties) {
-        auto* box = new QComboBox(this);
-        box->addItem(tr("(none)"), QString());
-        for (const QString& c : categories)
-            box->addItem(c, c);
-        form->addRow(p + u':', box);
-        combos_.append(box);
-    }
-    // The next property starts from a different category than the ones already picked.
-    for (qsizetype i = 0; i < combos_.size(); ++i) {
-        connect(combos_[i], &QComboBox::currentIndexChanged, this, [this, i] {
-            const QString v = combos_[i]->currentData().toString();
-            for (qsizetype j = i + 1; j < combos_.size(); ++j) {
-                if (!v.isEmpty() && combos_[j]->currentData().toString() == v) combos_[j]->setCurrentIndex(0);
-            }
-        });
-    }
-    lay->addLayout(form);
-    tags_ = new TagPicker(this);
-    tags_->setVaultTags(vaultTags);
-    lay->addWidget(tags_, 1);
+    top->addRow(tr("Name:"), name_);
+    lay->addLayout(top);
+    form_ = new PropertiesForm(settings, vaultTags, this);
+    form_->prefillNew(QDate::currentDate(), QGuiApplication::clipboard()->text());
+    lay->addWidget(form_, 1);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttons->button(QDialogButtonBox::Ok)->setText(tr("Create"));
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -55,10 +38,12 @@ NewNoteDialog::NewNoteDialog(const QString& suggestedName, const QStringList& pr
     connect(name_, &QLineEdit::textChanged, this, update);
     update();
     // Enter on an empty tag search creates the note, as Enter in the name does.
-    connect(tags_, &TagPicker::submitted, this, [this] {
-        if (!name().isEmpty()) accept();
-    });
-    resize(440, 460);
+    if (TagPicker* tags = form_->tagPicker()) {
+        connect(tags, &TagPicker::submitted, this, [this] {
+            if (!name().isEmpty()) accept();
+        });
+    }
+    resize(520, sizeHint().height());
 }
 
 QString NewNoteDialog::name() const
@@ -68,21 +53,19 @@ QString NewNoteDialog::name() const
     return n;
 }
 
-QList<QPair<QString, QString>> NewNoteDialog::values() const
+QComboBox* NewNoteDialog::combo(int i) const
 {
-    QList<QPair<QString, QString>> out;
-    for (qsizetype i = 0; i < combos_.size(); ++i) {
-        const QString v = combos_[i]->currentData().toString();
-        if (!v.isEmpty()) out.append({properties_.value(i), v});
-    }
-    return out;
+    return form_->categoryCombo(i);
+}
+
+TagPicker* NewNoteDialog::tagPicker() const
+{
+    return form_->tagPicker();
 }
 
 QByteArray NewNoteDialog::content() const
 {
-    FrontmatterPatch patch;
-    patch.addIfMissing = values();
-    patch.addTags = tags_->tags();
+    const FrontmatterPatch patch = form_->patch(Frontmatter{}, writeEmpty_);
     const FrontmatterEdit e = planFrontmatterEdit(QString(), patch);
     return e.changed ? e.text.toUtf8() : QByteArray();
 }

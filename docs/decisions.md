@@ -315,3 +315,18 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
 - **New notes:** Ctrl+N now always asks for a name and offers the same picker (plus the category dropdowns when they're configured). Previously it created "Untitled" straight away when no categories were set; the name field starts as "Untitled", so Enter keeps the quick path. Notes created from links and the quick switcher are unchanged.
 - **Autocomplete in frontmatter:** inside the `tags` (or `tag`) property, as a block-list item, in a flow list or in a plain string, typing a tag shows the vault's tags, as `#` does in the body.
 - Only frontmatter tags are edited. Inline `#tags` in the body stay where they are.
+
+## 2026-11-25 — Properties as a form
+
+- **The form:** Ctrl+N and Edit › Properties… (Ctrl+T, replacing Tags…) show the note's properties as a form built from a property list in the vault settings. Each property has a kind:
+  - category: a dropdown of the category tags, or the pinned tags when none are set;
+  - choice: a dropdown of its own values (status: draft, active, done);
+  - tags: the tag picker;
+  - text (summary);
+  - list, one per line (aliases, sources);
+  - date: `YYYY-MM-DD`, today on a new note, with a Today button.
+- **Default list:** when the vault hasn't set its own, the list is the tag properties as categories, then tags, aliases, status, summary, sources and created. It's edited in Vault settings › Properties and tags. That tab also holds the tag scheme, and "Detect from vault" refreshes the default list.
+- **Prefilled:** dates are today on a new note. A single http(s) link on the clipboard becomes the first `sources` entry. Choosing a category adds it to the tags as well (the vault's existing convention; it can be turned off) and takes it out again when the category changes. Suggest (with the assistant configured) fills only empty fields; Ctrl+Shift+M opens the form and runs it. The old review dialog is gone.
+- **Writing:** only properties whose value changed are written, in place: a scalar line is replaced, and a block list keeps its indentation and a flow list stays a flow list. Tags are still added and removed in their own style. New properties go at the end in form order. Properties not in the list are never touched, and values the merge can't edit (block scalars, nested values) show read-only. Any trailing comment on a changed line is dropped.
+- **Blank fields:** "Write properties left blank as empty" (on by default, as asked) writes `status:` and so on, so every note has the same keys. On an existing note these are only added together with a real change, so opening and closing the form never edits a note. Clearing a field leaves the key empty, or removes it when the option is off.
+- **YAML values:** URLs and other values with a colon not followed by a space are now written plain (`https://…`), as Obsidian writes them. They are still quoted inside flow lists. A test checks that each kind of value reads back unchanged.

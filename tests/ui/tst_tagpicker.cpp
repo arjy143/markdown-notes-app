@@ -107,16 +107,6 @@ private Q_SLOTS:
         QCOMPARE(shown(p).mid(0, 2), (QStringList{u"projects"_s, u"project"_s}));
         QCOMPARE(p.results()->item(0)->text(), u"#projects   88 notes"_s);
     }
-
-    void dialogReportsTheChanges()
-    {
-        NoteTagsDialog d(u"Note"_s, {u"old"_s, u"keep"_s}, vaultTags());
-        d.picker()->removeTag(u"OLD"_s);
-        d.picker()->addTag(u"python"_s);
-        d.picker()->addTag(u"brand new"_s);
-        QCOMPARE(d.added(), (QStringList{u"python"_s, u"brand-new"_s}));
-        QCOMPARE(d.removed(), QStringList{u"old"_s});
-    }
 };
 
 QTEST_MAIN(TestTagPicker)

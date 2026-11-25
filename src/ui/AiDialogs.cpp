@@ -1,15 +1,11 @@
 #include "AiDialogs.h"
 
-#include "core/parse/Frontmatter.h"
-
 #include <QCheckBox>
 #include <QDialogButtonBox>
-#include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -124,76 +120,6 @@ void AiSettingsDialog::test()
                        : tr("Embeddings: %1").arg(error));
         });
     }
-}
-
-AiFrontmatterDialog::AiFrontmatterDialog(const QString& noteText, const ai::FrontmatterSuggestion& s,
-                                         QWidget* parent)
-    : QDialog(parent), noteText_(noteText)
-{
-    setWindowTitle(tr("Suggested frontmatter"));
-    auto* lay = new QVBoxLayout(this);
-    auto* intro = new QLabel(tr("Review before applying. Existing values are kept."), this);
-    intro->setWordWrap(true);
-    lay->addWidget(intro);
-    const Frontmatter fm = parseFrontmatter(noteText.toUtf8());
-    auto* form = new QFormLayout;
-    for (const auto& [key, value] : s.properties) {
-        auto* edit = new QLineEdit(value, this);
-        if (const FrontmatterField* have = fm.field(key)) {
-            edit->setText(have->value);
-            edit->setEnabled(false);
-            edit->setToolTip(tr("Already set (suggested: %1)").arg(value));
-        }
-        form->addRow(key + u':', edit);
-        fields_.append({key, edit});
-        connect(edit, &QLineEdit::textChanged, this, &AiFrontmatterDialog::updatePreview);
-    }
-    tags_ = new QLineEdit(s.tags.join(u", "_s), this);
-    tags_->setToolTip(tr("Comma-separated"));
-    form->addRow(tr("Add tags:"), tags_);
-    connect(tags_, &QLineEdit::textChanged, this, &AiFrontmatterDialog::updatePreview);
-    lay->addLayout(form);
-    lay->addWidget(new QLabel(tr("Preview:"), this));
-    preview_ = new QPlainTextEdit(this);
-    preview_->setReadOnly(true);
-    preview_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    lay->addWidget(preview_, 1);
-    note_ = new QLabel(this);
-    note_->setWordWrap(true);
-    lay->addWidget(note_);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    buttons->button(QDialogButtonBox::Ok)->setText(tr("Apply"));
-    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    lay->addWidget(buttons);
-    updatePreview();
-    resize(560, 520);
-}
-
-FrontmatterPatch AiFrontmatterDialog::patch() const
-{
-    FrontmatterPatch p;
-    for (const auto& [key, edit] : fields_) {
-        if (edit->isEnabled() && !edit->text().trimmed().isEmpty())
-            p.addIfMissing.append({key, edit->text().trimmed()});
-    }
-    for (const QString& t : tags_->text().split(u',', Qt::SkipEmptyParts))
-        p.addTags.append(t.trimmed());
-    return p;
-}
-
-void AiFrontmatterDialog::updatePreview()
-{
-    const FrontmatterEdit e = planFrontmatterEdit(noteText_, patch());
-    if (!e.ok) {
-        preview_->setPlainText(QString());
-        note_->setText(e.error);
-        return;
-    }
-    QString block = e.text;
-    if (!e.changed && e.replaceLines == 0) block = tr("No changes");
-    preview_->setPlainText(block);
-    note_->setText(e.skipped.isEmpty() ? QString() : tr("Not added: %1").arg(e.skipped.join(u"; "_s)));
 }
 
 } // namespace mn::ui

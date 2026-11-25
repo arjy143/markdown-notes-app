@@ -134,8 +134,9 @@ public:
     void quickCapture();
     // Opens today's daily note, creating it (with the daily-note tags) first.
     void openToday();
-    // Ctrl+T: pick the open note's tags; applied to its frontmatter as one undoable edit.
-    void editTags();
+    // Ctrl+T: the open note's properties as a form; applied to its frontmatter as one
+    // undoable edit. With `suggest`, the assistant fills the empty fields first.
+    void editProperties(bool suggest = false);
     // Ticks off or deletes a task in its note (from the Tasks view). `confirmDelete`
     // asks first; tests pass false.
     bool editTask(const mn::TaskInfo& task, mn::TaskAction action, bool confirmDelete = true);

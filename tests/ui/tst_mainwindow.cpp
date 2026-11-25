@@ -12,6 +12,7 @@
 #include "ui/NewNoteDialog.h"
 #include "ui/NoteEditor.h"
 #include "ui/Panels.h"
+#include "ui/PropertiesForm.h"
 #include "ui/QuickSwitcher.h"
 #include "ui/ReadingView.h"
 #include "ui/TagPicker.h"
@@ -743,6 +744,7 @@ private Q_SLOTS:
 
     void newNoteAsksForCategories()
     {
+        QApplication::clipboard()->clear();
         test::VaultCopy v(u"ui-vault"_s);
         VaultSettings st = loadVaultSettings(v.root()).settings;
         st.tagProperties = {u"primary"_s, u"secondary"_s};
@@ -771,8 +773,12 @@ private Q_SLOTS:
         action->trigger();
         QVERIFY(checked);
         QCOMPARE(w.currentPath(), u"Idea.md"_s);
-        QCOMPARE(test::readBytes(v.path(u"Idea.md"_s)),
-                 QByteArray("---\nprimary: tech\nsecondary: personal\n---\n"));
+        // Categories are copied into the tags; the rest is written empty, created is today.
+        QCOMPARE(
+            test::readBytes(v.path(u"Idea.md"_s)),
+            QByteArray("---\nprimary: tech\nsecondary: personal\ntags:\n  - tech\n  - personal\naliases:\n"
+                       "status:\nsummary:\nsources:\ncreated: ") +
+                QDate::currentDate().toString(Qt::ISODate).toUtf8() + "\n---\n");
 
         // Cancel creates nothing.
         const int before = static_cast<int>(test::snapshotTree(v.root()).size());
@@ -781,42 +787,54 @@ private Q_SLOTS:
         QCOMPARE(static_cast<int>(test::snapshotTree(v.root()).size()), before);
     }
 
-    void tagsDialogEditsTheFrontmatter()
+    void propertiesFormEditsTheFrontmatter()
     {
         test::VaultCopy v(u"ui-vault"_s);
-        QVERIFY(
-            test::writeBytes(v.path(u"Tagged.md"_s), "---\ntitle: T\ntags:\n  - old\n  - keep\n---\nBody\n"));
+        const QByteArray tagged = "---\ntitle: T\ntags:\n  - old\n  - keep\n---\nBody\n";
+        QVERIFY(test::writeBytes(v.path(u"Tagged.md"_s), tagged));
         MainWindow w;
         QVERIFY(w.openVault(v.root()));
         QVERIFY(waitIndexed(w));
         QVERIFY(w.openNote(u"Tagged.md"_s));
-        bool seen = false;
-        QTimer::singleShot(0, &w, [&] {
-            auto* dlg = qobject_cast<NoteTagsDialog*>(QApplication::activeModalWidget());
-            QVERIFY(dlg);
-            QCOMPARE(dlg->picker()->tags(), (QStringList{u"old"_s, u"keep"_s}));
-            dlg->picker()->removeTag(u"old"_s);
-            QTest::keyClicks(dlg->picker()->searchBox(), u"hom"_s); // "home", from Home.md
-            QTest::keyClick(dlg->picker()->searchBox(), Qt::Key_Return);
-            seen = true;
-            QTest::keyClick(dlg->picker()->searchBox(), Qt::Key_Return); // empty search: done
-        });
-        w.editTags();
-        QVERIFY(seen);
-        QCOMPARE(w.editor()->bufferText(), u"---\ntitle: T\ntags:\n  - keep\n  - home\n---\nBody\n"_s);
-        // One undo step restores it.
-        w.editor()->undo();
-        QCOMPARE(w.editor()->bufferText(), u"---\ntitle: T\ntags:\n  - old\n  - keep\n---\nBody\n"_s);
+        auto properties = [&w](const std::function<void(PropertiesDialog*)>& f) {
+            QTimer::singleShot(0, &w, [f] {
+                auto* dlg = qobject_cast<PropertiesDialog*>(QApplication::activeModalWidget());
+                QVERIFY(dlg);
+                f(dlg);
+            });
+            w.editProperties();
+        };
+        // Looking without changing anything never edits the note.
+        properties([](PropertiesDialog* d) { d->accept(); });
+        QCOMPARE(w.editor()->bufferText().toUtf8(), tagged);
 
-        // A note without frontmatter gets one.
-        QVERIFY(w.openNote(u"Second.md"_s));
-        QTimer::singleShot(0, &w, [] {
-            auto* dlg = qobject_cast<NoteTagsDialog*>(QApplication::activeModalWidget());
-            QVERIFY(dlg);
-            dlg->picker()->addTag(u"draft"_s);
-            dlg->accept();
+        properties([](PropertiesDialog* d) {
+            PropertiesForm* f = d->form();
+            QCOMPARE(f->tagPicker()->tags(), (QStringList{u"old"_s, u"keep"_s}));
+            f->tagPicker()->removeTag(u"old"_s);
+            QTest::keyClicks(f->tagPicker()->searchBox(), u"hom"_s); // "home", from Home.md
+            QTest::keyClick(f->tagPicker()->searchBox(), Qt::Key_Return);
+            f->setText(u"status"_s, u"draft"_s);
+            f->setText(u"summary"_s, u"Short:  one line\nonly"_s);
+            QTest::keyClick(f->tagPicker()->searchBox(), Qt::Key_Return); // empty search: done
         });
-        w.editTags();
+        // Tags edited in place; blank properties added empty, in form order; title untouched.
+        QCOMPARE(w.editor()->bufferText(),
+                 u"---\ntitle: T\ntags:\n  - keep\n  - home\naliases:\nstatus: draft\n"
+                 "summary: \"Short: one line only\"\nsources:\ncreated:\n---\nBody\n"_s);
+        w.editor()->undo(); // one step
+        QCOMPARE(w.editor()->bufferText().toUtf8(), tagged);
+
+        // Without empty properties, only what was filled in is written.
+        VaultSettings s = w.vault()->settings();
+        s.writeEmptyProperties = false;
+        QString err;
+        QVERIFY(w.vault()->setSettings(s, &err));
+        QVERIFY(w.openNote(u"Second.md"_s));
+        properties([](PropertiesDialog* d) {
+            d->form()->tagPicker()->addTag(u"draft"_s);
+            d->accept();
+        });
         QVERIFY(w.editor()->bufferText().startsWith(u"---\ntags:\n  - draft\n---\n# Second\n"_s));
     }
 
@@ -859,6 +877,7 @@ private Q_SLOTS:
 
     void newNoteOffersTags()
     {
+        QApplication::clipboard()->setText(u"https://example.com/article"_s); // becomes the source
         test::VaultCopy v(u"ui-vault"_s);
         MainWindow w;
         QVERIFY(w.openVault(v.root()));
@@ -878,7 +897,9 @@ private Q_SLOTS:
         }
         QCOMPARE(w.currentPath(), u"Plan.md"_s);
         QCOMPARE(test::readBytes(v.path(u"Plan.md"_s)),
-                 QByteArray("---\ntags:\n  - home\n  - new-idea\n---\n"));
+                 QByteArray("---\ntags:\n  - home\n  - new-idea\naliases:\nstatus:\nsummary:\nsources:\n"
+                            "  - https://example.com/article\ncreated: ") +
+                     QDate::currentDate().toString(Qt::ISODate).toUtf8() + "\n---\n");
     }
 
     void headingsUseTheNormalTextColour()

@@ -2,7 +2,6 @@
 
 #include "core/index/IndexTypes.h"
 
-#include <QDialog>
 #include <QStringList>
 #include <QWidget>
 
@@ -52,21 +51,6 @@ private:
     QLabel* none_;
     QLineEdit* search_;
     QListWidget* results_;
-};
-
-// Ctrl+T: the open note's frontmatter tags, edited with a TagPicker.
-class NoteTagsDialog : public QDialog {
-    Q_OBJECT
-public:
-    NoteTagsDialog(const QString& noteName, const QStringList& tags, const std::vector<TagCount>& vaultTags,
-                   QWidget* parent = nullptr);
-    TagPicker* picker() const { return picker_; }
-    QStringList added() const;
-    QStringList removed() const;
-
-private:
-    QStringList original_;
-    TagPicker* picker_;
 };
 
 } // namespace mn::ui

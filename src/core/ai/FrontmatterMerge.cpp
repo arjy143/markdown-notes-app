@@ -5,6 +5,9 @@
 
 #include <QRegularExpression>
 
+#include <algorithm>
+#include <utility>
+
 using namespace Qt::StringLiterals;
 
 namespace mn {
@@ -207,6 +210,200 @@ FrontmatterEdit planTagRemoval(QStringView noteText, const QStringList& remove)
     return e;
 }
 
+// "key" as written at the start of a "key: value" line, up to the colon.
+QString keyText(const QString& l)
+{
+    qsizetype from = 0;
+    if (l.startsWith(u'"') || l.startsWith(u'\'')) from = std::max<qsizetype>(0, l.indexOf(l[0], 1));
+    const qsizetype colon = l.indexOf(u':', from);
+    return colon < 0 ? l : l.left(colon);
+}
+
+// A value inside a flow list "[a, b]": quoted when it has characters that could end
+// it or be read as a key or comment there.
+QString flowItem(const QString& v)
+{
+    QString plain = yamlScalar(v);
+    if (plain.startsWith(u'"')) return plain;
+    for (QChar c : plain) {
+        if (c == u',' || c == u'[' || c == u']' || c == u'{' || c == u'}' || c == u':' || c == u'#')
+            return u'"' + plain + u'"';
+    }
+    return plain;
+}
+
+// Lines [first, last] of property `key` in `out`; first == out.size() when it's absent.
+std::pair<std::size_t, std::size_t> propertyLines(const std::vector<Line>& out, const QString& key)
+{
+    std::size_t first = out.size();
+    for (std::size_t i = 0; i < out.size() && first == out.size(); ++i) {
+        if (keyOf(out[i].text) == key) first = i;
+    }
+    std::size_t last = first;
+    for (std::size_t j = first + 1; first < out.size() && j < out.size(); ++j) {
+        const QString& t = out[j].text;
+        if (t.trimmed().isEmpty()) continue;
+        if (indentOf(t) == 0 && !t.startsWith(u'-')) break;
+        last = j;
+    }
+    return {first, last};
+}
+
+FrontmatterEdit planPropertyChanges(QStringView noteText, const QList<PropertyChange>& changes)
+{
+    FrontmatterEdit e;
+    const Frontmatter fm = parseFrontmatter(noteText.toUtf8());
+    if (!fm.present) {
+        e.ok = true;
+        return e;
+    }
+    if (!fm.valid) {
+        e.error = u"Invalid frontmatter (%1). The note was not changed."_s.arg(fm.error);
+        return e;
+    }
+    const std::vector<Line> lines = splitLines(noteText);
+    const int closing = fm.closingLine;
+    const QString nl = lines.front().ending.isEmpty() ? u"\n"_s : lines.front().ending;
+    std::vector<Line> out;
+    for (int i = 1; i < closing; ++i)
+        out.push_back(lines[static_cast<std::size_t>(i)]);
+
+    for (const PropertyChange& c : changes) {
+        QStringList values;
+        for (const QString& v : c.values) {
+            const QString t = v.simplified();
+            if (!t.isEmpty() && !values.contains(t)) values.append(t);
+        }
+        if (!c.list && values.size() > 1) values = values.mid(0, 1);
+        auto [first, last] = propertyLines(out, c.key);
+        auto blockItems = [&](const QString& prefix) {
+            std::vector<Line> items;
+            for (const QString& v : std::as_const(values))
+                items.push_back({prefix + yamlScalar(v), nl});
+            return items;
+        };
+        if (first == out.size()) { // not there yet: added at the end
+            if (values.isEmpty() && !c.keepEmpty) continue;
+            if (c.list) {
+                out.push_back({c.key + u':', nl});
+                const std::vector<Line> items = blockItems(u"  - "_s);
+                out.insert(out.end(), items.begin(), items.end());
+            } else {
+                out.push_back(
+                    {c.key + u':' + (values.isEmpty() ? QString() : u' ' + yamlScalar(values.front())), nl});
+            }
+            continue;
+        }
+        const FrontmatterField* f = fm.field(c.key);
+        if (f == nullptr || f->complex) {
+            e.skipped.append(c.key + u" (unsupported format)"_s);
+            continue;
+        }
+        const QStringList current =
+            f->isList ? f->list : (f->value.isEmpty() ? QStringList() : QStringList{f->value});
+        if (current == values) continue;
+        const auto at = [&](std::size_t i) { return out.begin() + static_cast<std::ptrdiff_t>(i); };
+        if (values.isEmpty() && !c.keepEmpty) {
+            out.erase(at(first), at(last + 1));
+            continue;
+        }
+        const QString key = keyText(out[first].text);
+        const QString value = valueOf(out[first].text);
+        if (!c.list) {
+            if (f->isList || last != first) {
+                e.skipped.append(c.key + u" (unsupported format)"_s);
+                continue;
+            }
+            out[first].text = key + u':' + (values.isEmpty() ? QString() : u' ' + yamlScalar(values.front()));
+        } else if (f->isList && value.startsWith(u'[') && last == first) {
+            QStringList items;
+            for (const QString& v : std::as_const(values))
+                items.append(flowItem(v));
+            out[first].text = key + u": ["_s + items.join(u", "_s) + u']';
+        } else {
+            // A block list, in the indentation the existing items use.
+            QString prefix = u"  - "_s;
+            for (std::size_t j = first + 1; j <= last && j < out.size(); ++j) {
+                const QString& t = out[j].text;
+                if (t.trimmed().startsWith(u'-')) {
+                    prefix = t.left(indentOf(t)) + u"- "_s;
+                    break;
+                }
+            }
+            out[first].text = key + u':';
+            out.erase(at(first + 1), at(last + 1));
+            const std::vector<Line> items = blockItems(prefix);
+            out.insert(at(first + 1), items.begin(), items.end());
+        }
+    }
+    finishEdit(e, lines, out, closing);
+    return e;
+}
+
+// The first `n` lines of `text`, with their line endings.
+QString firstLines(QStringView text, int n)
+{
+    qsizetype pos = 0;
+    for (int i = 0; i < n && pos < text.size(); ++i) {
+        const qsizetype nl = text.indexOf(u'\n', pos);
+        pos = nl < 0 ? text.size() : nl + 1;
+    }
+    return text.left(pos).toString();
+}
+
+} // namespace
+
+FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch& patch);
+
+namespace {
+
+// Property changes, then tag removals, then additions, each on the result of the
+// one before; returned as one edit of the original frontmatter.
+FrontmatterEdit planInStages(QStringView noteText, const FrontmatterPatch& patch)
+{
+    const Frontmatter fm = parseFrontmatter(noteText.toUtf8());
+    if (fm.present && !fm.valid) {
+        FrontmatterEdit e;
+        e.error = u"Invalid frontmatter (%1). The note was not changed."_s.arg(fm.error);
+        return e;
+    }
+    const int originalLines = fm.present ? fm.closingLine + 1 : 0;
+    QString text = noteText.toString();
+    const bool writes = std::any_of(patch.set.begin(), patch.set.end(), [](const PropertyChange& c) {
+        return c.keepEmpty || !c.values.isEmpty();
+    });
+    if (!fm.present && writes) {
+        const QString nl = text.section(u'\n', 0, 0).endsWith(u'\r') ? u"\r\n"_s : u"\n"_s;
+        text = u"---"_s + nl + u"---"_s + nl + text;
+    }
+    QStringList skipped;
+    auto stage = [&](const FrontmatterEdit& s) {
+        skipped += s.skipped;
+        if (s.ok) text = applyFrontmatterEdit(text, s);
+        return s.ok;
+    };
+    FrontmatterEdit fail = planPropertyChanges(text, patch.set);
+    if (!stage(fail)) return fail;
+    fail = planTagRemoval(text, patch.removeTags);
+    if (!stage(fail)) return fail;
+    FrontmatterPatch rest;
+    rest.addTags = patch.addTags;
+    rest.addIfMissing = patch.addIfMissing;
+    fail = planFrontmatterEdit(text, rest);
+    if (!stage(fail)) return fail;
+
+    FrontmatterEdit e;
+    e.ok = true;
+    e.skipped = skipped;
+    e.replaceLines = originalLines;
+    const Frontmatter result = parseFrontmatter(text.toUtf8());
+    // A block added for changes that turned out to be no-ops isn't written.
+    if (!result.present || (!fm.present && result.fields.isEmpty())) return e;
+    e.text = firstLines(text, result.closingLine + 1);
+    e.changed = e.text != firstLines(noteText, originalLines);
+    return e;
+}
+
 } // namespace
 
 QString tagLookAlikeKey(QStringView tag)
@@ -245,9 +442,12 @@ QString cleanTag(QStringView tag)
 
 QString yamlScalar(const QString& value)
 {
-    static const QRegularExpression plain(uR"(^[\p{L}\p{N}][\p{L}\p{N} _.,()/'-]*$)"_s);
+    // Plain when YAML reads it back as the same string: starts with a letter or
+    // digit, no ": " or " #", and no other character that means something.
+    static const QRegularExpression plain(uR"(^[\p{L}\p{N}][\p{L}\p{N} _.,()/'+?=&%~@#:-]*$)"_s);
     QString v = value.simplified();
-    if (plain.match(v).hasMatch() && !v.endsWith(u' ')) {
+    if (plain.match(v).hasMatch() && !v.endsWith(u' ') && !v.endsWith(u':') && !v.contains(u": "_s) &&
+        !v.contains(u" #"_s)) {
         const QString lower = v.toLower();
         // Words YAML would read as booleans or null stay strings.
         static const QStringList special{u"true"_s, u"false"_s, u"yes"_s, u"no"_s, u"on"_s,
@@ -264,25 +464,7 @@ QString yamlScalar(const QString& value)
 
 FrontmatterEdit planFrontmatterEdit(QStringView noteText, const FrontmatterPatch& patch)
 {
-    if (!patch.removeTags.isEmpty()) {
-        // Removals first, then the additions on the result, as one edit of the original.
-        FrontmatterEdit removed = planTagRemoval(noteText, patch.removeTags);
-        if (!removed.ok || !removed.changed) {
-            FrontmatterPatch rest = patch;
-            rest.removeTags.clear();
-            if (!removed.ok) return removed;
-            FrontmatterEdit e = planFrontmatterEdit(noteText, rest);
-            e.skipped = removed.skipped + e.skipped;
-            return e;
-        }
-        FrontmatterPatch rest = patch;
-        rest.removeTags.clear();
-        FrontmatterEdit e = planFrontmatterEdit(applyFrontmatterEdit(noteText, removed), rest);
-        if (!e.ok) return e;
-        if (!e.changed) return removed;
-        e.replaceLines = removed.replaceLines;
-        return e;
-    }
+    if (!patch.set.isEmpty() || !patch.removeTags.isEmpty()) return planInStages(noteText, patch);
     FrontmatterEdit e;
     QStringList tags;
     for (const QString& t : patch.addTags) {

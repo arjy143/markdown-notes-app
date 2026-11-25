@@ -9,10 +9,10 @@
 #include "NewNoteDialog.h"
 #include "NoteEditor.h"
 #include "Panels.h"
+#include "PropertiesForm.h"
 #include "QuickSwitcher.h"
 #include "ReadingView.h"
 #include "SettingsDialog.h"
-#include "TagPicker.h"
 #include "TasksPanel.h"
 #include "core/ai/FrontmatterMerge.h"
 #ifdef MN_HAVE_AI
@@ -336,7 +336,7 @@ void MainWindow::buildMenus()
         findBar_->showFind(true);
     });
     edit->addAction(tr("Insert &template…"), QKeySequence(u"Alt+T"_s), this, &MainWindow::insertTemplate);
-    edit->addAction(tr("T&ags…"), QKeySequence(u"Ctrl+T"_s), this, &MainWindow::editTags);
+    edit->addAction(tr("&Properties…"), QKeySequence(u"Ctrl+T"_s), this, [this] { editProperties(); });
     QAction* suggest = edit->addAction(tr("Suggest &links while typing"));
     suggest->setCheckable(true);
     suggest->setChecked(editor_->linkSuggestions());
@@ -382,7 +382,7 @@ void MainWindow::buildMenus()
     tools->addAction(tr("&Rebuild index"), this, [this] { vault_->rescan(); });
 #ifdef MN_HAVE_AI
     tools->addSeparator();
-    tools->addAction(tr("Suggest &frontmatter and tags…"), QKeySequence(u"Ctrl+Shift+M"_s), this,
+    tools->addAction(tr("Suggest &properties…"), QKeySequence(u"Ctrl+Shift+M"_s), this,
                      &MainWindow::suggestFrontmatter);
     tools->addAction(tr("As&k your notes"), QKeySequence(u"Ctrl+Shift+A"_s), this, [this] {
         setPaneVisible(0, true);
@@ -473,32 +473,11 @@ void MainWindow::showAiSettings()
 void MainWindow::suggestFrontmatter()
 {
     if (note_.path.isEmpty()) return;
-    if (note_.readOnly) {
-        QMessageBox::information(this, tr("Suggest frontmatter"), tr("This note is open read-only."));
-        return;
-    }
     if (!assistant_->config().chatReady()) {
         showAiSettings();
         if (!assistant_->config().chatReady()) return;
     }
-    const QString path = note_.path;
-    statusBar()->showMessage(tr("Generating suggestions for %1…").arg(paths::linkName(path)));
-    assistant_->suggestFrontmatter(path, editor_->bufferText(),
-                                   [this, path](const ai::FrontmatterSuggestion& s) {
-                                       statusBar()->clearMessage();
-                                       if (path != note_.path) return; // another note was opened meanwhile
-                                       if (!s.error.isEmpty()) {
-                                           QMessageBox::warning(this, tr("Suggest frontmatter"), s.error);
-                                           return;
-                                       }
-                                       // Reviewed against the note as it is now (it may have been edited
-                                       // while waiting).
-                                       AiFrontmatterDialog dlg(editor_->bufferText(), s, this);
-                                       if (dlg.exec() != QDialog::Accepted || path != note_.path) return;
-                                       QString err;
-                                       if (!applyFrontmatter(dlg.patch(), &err))
-                                           QMessageBox::warning(this, tr("Suggest frontmatter"), err);
-                                   });
+    editProperties(true);
 }
 #else
 void MainWindow::buildAssistant() {}
@@ -946,8 +925,7 @@ void MainWindow::newNoteIn(const QString& folder)
     const VaultSettings& st = vault_->settings();
     const QString path = paths::uniqueVaultPath(vault_->root(), folder, u"Untitled"_s, u".md"_s);
     if (path.isEmpty()) return;
-    NewNoteDialog dlg(paths::linkName(path), st.tagProperties, st.categoryTags, vault_->snapshot().tags,
-                      this);
+    NewNoteDialog dlg(paths::linkName(path), st, vault_->snapshot().tags, this);
     if (dlg.exec() != QDialog::Accepted) return;
     const QString name = dlg.name();
     const QByteArray content = dlg.content();
@@ -1372,7 +1350,7 @@ void MainWindow::openToday()
     editor_->setFocus();
 }
 
-void MainWindow::editTags()
+void MainWindow::editProperties(bool suggest)
 {
     if (note_.path.isEmpty()) return;
     if (note_.readOnly || editor_->isReadOnly()) {
@@ -1381,26 +1359,39 @@ void MainWindow::editTags()
     }
     const Frontmatter fm = parseFrontmatter(editor_->bufferText().toUtf8());
     if (fm.present && !fm.valid) {
-        QMessageBox::warning(this, tr("Tags"),
+        QMessageBox::warning(this, tr("Properties"),
                              tr("This note's frontmatter can't be read (%1).").arg(fm.error));
         return;
     }
-    NoteTagsDialog dlg(paths::linkName(note_.path), fm.tags, vault_->snapshot().tags, this);
-    if (dlg.exec() != QDialog::Accepted) return;
-    FrontmatterPatch patch;
-    patch.addTags = dlg.added();
-    patch.removeTags = dlg.removed();
-    if (patch.addTags.isEmpty() && patch.removeTags.isEmpty()) return;
+    const QString path = note_.path;
+    PropertiesDialog::Suggest ask;
+#ifdef MN_HAVE_AI
+    if (assistant_->config().chatReady()) {
+        ask = [this, path](auto done) {
+            assistant_->suggestFrontmatter(
+                path, editor_->bufferText(),
+                [done](const ai::FrontmatterSuggestion& s) { done(s.properties, s.tags, s.error); });
+        };
+    }
+#endif
+    const VaultSettings& st = vault_->settings();
+    PropertiesDialog dlg(paths::linkName(path), fm, st, vault_->snapshot().tags, ask, this);
+    if (suggest) dlg.suggest();
+    if (dlg.exec() != QDialog::Accepted || path != note_.path) return;
+    // Planned against the note as it is now; blank properties are only added along
+    // with a real change, so looking at the form never edits the note.
+    const Frontmatter now = parseFrontmatter(editor_->bufferText().toUtf8());
+    if (!dlg.form()->hasChanges(now)) return;
     QString err;
     QStringList skipped;
-    if (!applyFrontmatter(patch, &err, &skipped)) {
-        QMessageBox::warning(this, tr("Tags"), err);
+    if (!applyFrontmatter(dlg.form()->patch(now, st.writeEmptyProperties), &err, &skipped)) {
+        QMessageBox::warning(this, tr("Properties"), err);
         return;
     }
     if (!skipped.isEmpty())
-        QMessageBox::warning(
-            this, tr("Tags"),
-            tr("The tags are written in a form that can't be changed here: %1").arg(skipped.join(u"; "_s)));
+        QMessageBox::warning(this, tr("Properties"),
+                             tr("Some properties are written in a form that can't be changed here: %1")
+                                 .arg(skipped.join(u"; "_s)));
 }
 
 void MainWindow::quickCapture()

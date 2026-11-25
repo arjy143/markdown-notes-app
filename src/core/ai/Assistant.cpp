@@ -152,8 +152,8 @@ void Assistant::suggestFrontmatter(const QString& path, const QString& noteText,
     FrontmatterRequest req;
     req.title = paths::linkName(path);
     req.noteText = noteText;
-    req.categoryProperties = vault_->settings().tagProperties;
-    req.categories = vault_->settings().categoryTags;
+    req.categoryProperties = vault_->settings().categoryProperties();
+    req.categories = vault_->settings().categoryChoices();
     std::vector<TagCount> tags = vault_->snapshot().tags;
     std::stable_sort(tags.begin(), tags.end(),
                      [](const TagCount& a, const TagCount& b) { return a.notes > b.notes; });

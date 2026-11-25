@@ -75,12 +75,41 @@ private Q_SLOTS:
         s.minCategoryTags = 3;
         s.pinnedTags = {u"projects"_s, u"tech/ai"_s};
         s.dailyNoteTags = {u"journal"_s, u"daily"_s};
+        s.noteProperties = {{u"primary"_s, PropertyKind::Category, {}},
+                            {u"status"_s, PropertyKind::Choice, {u"todo"_s, u"done"_s}},
+                            {u"tags"_s, PropertyKind::Tags, {}},
+                            {u"sources"_s, PropertyKind::List, {}},
+                            {u"created"_s, PropertyKind::Date, {}},
+                            {u"summary"_s, PropertyKind::Text, {}}};
+        s.categoriesInTags = false;
+        s.writeEmptyProperties = false;
         QString err;
         QVERIFY(saveVaultSettings(dir.path(), s, &err));
         QCOMPARE(loadVaultSettings(dir.path()).settings, s);
         s.dailyNoteTags.clear(); // no tags is kept as no tags
         QVERIFY(saveVaultSettings(dir.path(), s, &err));
         QCOMPARE(loadVaultSettings(dir.path()).settings.dailyNoteTags, QStringList());
+    }
+
+    void defaultPropertyForm()
+    {
+        VaultSettings s;
+        s.tagProperties = {u"primary"_s, u"secondary"_s};
+        QStringList keys;
+        for (const PropertySpec& p : s.formProperties())
+            keys.append(p.key);
+        QCOMPARE(keys, (QStringList{u"primary"_s, u"secondary"_s, u"tags"_s, u"aliases"_s, u"status"_s,
+                                    u"summary"_s, u"sources"_s, u"created"_s}));
+        QCOMPARE(s.categoryProperties(), s.tagProperties);
+        QVERIFY(s.writeEmptyProperties && s.categoriesInTags);
+        // Category choices fall back to the pinned tags.
+        s.pinnedTags = {u"tech"_s};
+        QCOMPARE(s.categoryChoices(), QStringList{u"tech"_s});
+        s.categoryTags = {u"science"_s};
+        QCOMPARE(s.categoryChoices(), QStringList{u"science"_s});
+        // A vault's own list replaces the default.
+        s.noteProperties = {{u"area"_s, PropertyKind::Category, {}}};
+        QCOMPARE(s.categoryProperties(), QStringList{u"area"_s});
     }
 
     void dailyNoteTagsDefaultToJournal()
