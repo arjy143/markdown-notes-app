@@ -15,6 +15,8 @@ class QFileSystemWatcher;
 class QLabel;
 class QSplitter;
 class QStackedWidget;
+class QTabBar;
+class QTextDocument;
 class QTabWidget;
 class QTimer;
 class QTreeView;
@@ -91,10 +93,17 @@ private:
         bool readOnly = false;
         bool orphaned = false;
         bool saveErrorShown = false;
+        QString banner; // shown above the note (read-only, invalid frontmatter...)
     };
     struct HistoryEntry {
         QString path;
         int position = 0;
+    };
+    // Where a tab's note was left: restored when the tab is shown again.
+    struct ViewState {
+        int cursor = 0;
+        int scroll = 0;
+        bool reading = false;
     };
 
     void buildUi();
@@ -133,8 +142,17 @@ private:
 public:
     // Quick capture inside the app (the target note may be the open one).
     void quickCapture();
+    // Opens `path` once the vault's index has loaded (startup: links are then styled
+    // right the first time, with no re-highlight).
+    void openWhenReady(const QString& path);
     // Opens today's daily note, creating it (with the daily-note tags) first.
     void openToday();
+    // Tabs: the home page first, then one per open note. Opening a note from a panel
+    // or the quick switcher gives it a tab (or switches to its tab); following a link
+    // or going back/forward stays in the current tab.
+    QTabBar* tabBar() const { return tabBar_; }
+    QStringList openTabs() const; // note paths, in tab order
+    void closeTab(int index);
     // The home page (View › Home); also shown when no note is open.
     void showHome();
     bool homeShown() const;
@@ -181,6 +199,26 @@ private:
     QTabWidget* leftTabs_ = nullptr;
     class CalendarPanel* calendar_ = nullptr;
     class HomePage* home_ = nullptr;
+    QTabBar* tabBar_ = nullptr;
+    bool syncingTabs_ = false;      // the tab bar is being updated to match the open note
+    bool openInCurrentTab_ = false; // the next openNote replaces the current tab's note
+    QHash<QString, ViewState> viewStates_;
+    // Notes open in tabs keep their documents (and undo history); the ones not shown
+    // are parked here with their state. Parked notes have been saved.
+    QHash<QString, QTextDocument*> docs_;
+    QHash<QString, OpenNote> parked_;
+    QMetaObject::Connection docConn_;
+    void parkCurrent();
+    void pruneDocuments();
+    bool saveParked(QStringList* failed = nullptr);
+    int tabIndexFor(const QString& path) const;
+    void syncTabFor(const QString& path);
+    void onTabChanged(int index);
+    void rememberView();
+    void restoreView(const QString& path);
+    void saveTabs();
+    bool restoreTabs();
+    QString startupNote_;
     QTreeView* tree_ = nullptr;
     FileTreeModel* treeModel_ = nullptr;
     SearchPanel* search_ = nullptr;

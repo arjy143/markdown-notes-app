@@ -357,3 +357,18 @@ The user's vault isn't organised in folders: its seven category tags (tech, proj
   - Ctrl+Shift+V always pastes plain text.
   - Copying from the editor now puts only plain text on the clipboard.
 - **Export (File › Export):** the reading-view rendering in a light theme. PDF uses `QPdfWriter` and `QTextDocument::print`, both in QtGui, so no PrintSupport module is needed: A4, 18 mm margins. HTML is a single file with images and math as PNG data URIs. Links to vault notes become plain text, since they don't resolve outside the app. Exporting into a hidden vault folder such as `.obsidian/` is refused.
+
+## 2026-11-25 — Tabs
+
+Tabs were on the "not in v1" list; the user asked for them, so they're in and the list in `CLAUDE.md` is updated.
+- **A document per tab:** one editor widget shows the current tab's `QTextDocument`. Every open note keeps its own document, with its own highlighter and undo history, for as long as it has a tab. Switching tabs therefore keeps undo and redo and doesn't re-highlight. Memory grows with the open notes (their text and layout), and a note's document is freed when its tab closes or a link replaces it.
+  - Switching tabs saves the note being left, so notes in background tabs are always saved. Their files are checked again when their tab comes back: a clean note that changed on disk is reloaded, and a note with unsaved changes asks first, as for the open note.
+  - Reloading from disk is now one undoable edit, so it doesn't clear the undo history. This applies to the open note too.
+  - On quit, any background note that still has changes (after a failed save) is written, unless its file changed on disk. Otherwise quitting asks.
+  - Each tab also keeps its cursor, scroll position and reading mode.
+  - **Startup fix found while measuring:** a note named on the command line was opened before the index loaded, so all its links were first styled as unresolved. When the index arrived, the whole note was re-highlighted, which takes about 0.9 s for the 5,000-line benchmark note: "launch to usable" measured 1.3 to 2.5 s, over the limit. Such a note now opens once the index has loaded, like restored tabs: launch is about 180 ms and the note is open at about 0.4 s. When files are added or removed later, link styles are refreshed in the visible note only. Line by line is used when few lines have links, and a full re-highlight otherwise. Background tabs catch up when shown.
+- **Home is the first tab:** it can't be closed or moved.
+- **Where notes open:** a note opened from the file tree, search, tags, tasks, the calendar, the home page, the quick switcher or a new-note command gets its own tab, placed after the current one, or its existing tab is shown. Following a link or going back or forward replaces the current tab's note, as in Obsidian.
+- **Closing:** Ctrl+W, the tab's × or a middle-click closes a tab, and its right-hand neighbour takes over (home when none is left). The tab menu also has "Close other tabs". A tab whose note can't be saved stays open.
+- **Keyboard:** Ctrl+Tab and Ctrl+Shift+Tab (or Ctrl+PgDown and Ctrl+PgUp) cycle through tabs.
+- **Restored at startup:** open tabs and the active one are kept per vault in `QSettings` and restored on the next start, skipping notes that no longer exist. Tabs follow renames, and deleting a note closes its tab.

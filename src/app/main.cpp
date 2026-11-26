@@ -113,7 +113,7 @@ int main(int argc, char* argv[])
         if (cli.isSet(today))
             window.openToday();
         else if (!note.isEmpty())
-            window.openNote(note);
+            window.openWhenReady(note);
     } else {
         QTimer::singleShot(0, &window, [&window] { window.promptForVault(); });
     }

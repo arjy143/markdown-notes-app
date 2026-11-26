@@ -68,6 +68,7 @@
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTextBlock>
 #include <QTimer>
@@ -75,6 +76,8 @@
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <utility>
 
 using namespace Qt::StringLiterals;
 
@@ -128,6 +131,8 @@ MainWindow::~MainWindow()
     autosave_->stop();
     if (!note_.path.isEmpty() && !note_.readOnly && isDirty()) saveNow();
     disconnect(editor_, nullptr, this, nullptr);
+    if (!saveParked()) qWarning("Some notes in tabs couldn't be saved.");
+    disconnect(docConn_);
     disconnect(editor_->document(), nullptr, this, nullptr);
     disconnect(reading_, nullptr, this, nullptr);
     disconnect(vault_, nullptr, this, nullptr);
@@ -249,6 +254,48 @@ void MainWindow::buildUi()
     home_->setCaptureHandler(
         [this](const QString& text, QString* error) { return captureText(text, {}, error); });
     findBar_ = new FindBar(editor_, centerBox);
+    tabBar_ = new QTabBar(centerBox);
+    tabBar_->setDocumentMode(true);
+    tabBar_->setTabsClosable(true);
+    tabBar_->setMovable(true);
+    tabBar_->setExpanding(false);
+    tabBar_->setElideMode(Qt::ElideRight);
+    tabBar_->setUsesScrollButtons(true);
+    tabBar_->setContextMenuPolicy(Qt::CustomContextMenu);
+    tabBar_->addTab(tr("Home"));
+    tabBar_->setTabData(0, QString());
+    tabBar_->setTabButton(0, QTabBar::RightSide, nullptr);
+    tabBar_->setTabButton(0, QTabBar::LeftSide, nullptr);
+    tabBar_->installEventFilter(this);
+    connect(tabBar_, &QTabBar::currentChanged, this, &MainWindow::onTabChanged);
+    connect(tabBar_, &QTabBar::tabCloseRequested, this, &MainWindow::closeTab);
+    connect(tabBar_, &QTabBar::tabMoved, this, [this] {
+        if (syncingTabs_) return;
+        // Home stays first.
+        for (int i = 1; i < tabBar_->count(); ++i) {
+            if (tabBar_->tabData(i).toString().isEmpty()) {
+                syncingTabs_ = true;
+                tabBar_->moveTab(i, 0);
+                syncingTabs_ = false;
+                break;
+            }
+        }
+        saveTabs();
+    });
+    connect(tabBar_, &QTabBar::customContextMenuRequested, this, [this](const QPoint& pos) {
+        const int index = tabBar_->tabAt(pos);
+        if (index <= 0) return;
+        QMenu menu(this);
+        menu.addAction(tr("Close"), this, [this, index] { closeTab(index); });
+        menu.addAction(tr("Close other tabs"), this, [this, index] {
+            const QString keep = tabBar_->tabData(index).toString();
+            for (int i = tabBar_->count() - 1; i > 0; --i) {
+                if (tabBar_->tabData(i).toString() != keep) closeTab(i);
+            }
+        });
+        menu.exec(tabBar_->mapToGlobal(pos));
+    });
+    cl->addWidget(tabBar_);
     cl->addWidget(banner_);
     cl->addWidget(center_, 1);
     cl->addWidget(findBar_);
@@ -281,11 +328,17 @@ void MainWindow::buildUi()
     autosave_->setSingleShot(true);
     autosave_->setInterval(kAutosaveMs);
     connect(autosave_, &QTimer::timeout, this, [this] { saveNow(); });
-    connect(editor_->document(), &QTextDocument::contentsChanged, this, [this] {
-        if (loading_) return;
-        scheduleAutosave();
-        updateStatus();
-    });
+    // Autosave follows whichever note's document is shown.
+    auto bindDocument = [this](QTextDocument* doc) {
+        disconnect(docConn_);
+        docConn_ = connect(doc, &QTextDocument::contentsChanged, this, [this] {
+            if (loading_) return;
+            scheduleAutosave();
+            updateStatus();
+        });
+    };
+    connect(editor_, &NoteEditor::documentShown, this, bindDocument);
+    bindDocument(editor_->document());
     connect(editor_, &NoteEditor::focusLost, this, [this] { saveNow(); });
     connect(editor_, &NoteEditor::linkSuggestionHint, this, [this](const QString& hint) {
         if (hint.isEmpty())
@@ -356,7 +409,8 @@ void MainWindow::buildMenus()
     file->addAction(tr("&Rename / move…"), QKeySequence(Qt::Key_F2), this, [this] {
         if (!note_.path.isEmpty()) promptRename(note_.path, false);
     });
-    file->addAction(tr("&Close note"), QKeySequence(u"Ctrl+W"_s), this, &MainWindow::closeNote);
+    file->addAction(tr("&Close tab"), QKeySequence(u"Ctrl+W"_s), this,
+                    [this] { closeTab(tabBar_->currentIndex()); });
     QMenu* exportMenu = file->addMenu(tr("E&xport"));
     auto exportAs = [this](bool pdf) {
         if (note_.path.isEmpty()) return;
@@ -426,6 +480,15 @@ void MainWindow::buildMenus()
     view->addAction(tr("&Appearance…"), this, &MainWindow::showAppearance);
     view->addAction(tr("&Quick switcher…"), QKeySequence(u"Ctrl+O"_s), this, [this] { switcher_->popup(); });
     view->addAction(tr("&Home"), QKeySequence(u"Ctrl+Shift+H"_s), this, &MainWindow::showHome);
+    auto* nextTab = view->addAction(tr("&Next tab"), this, [this] {
+        if (tabBar_->count() > 1) tabBar_->setCurrentIndex((tabBar_->currentIndex() + 1) % tabBar_->count());
+    });
+    nextTab->setShortcuts({QKeySequence(u"Ctrl+Tab"_s), QKeySequence(u"Ctrl+PgDown"_s)});
+    auto* previousTab = view->addAction(tr("&Previous tab"), this, [this] {
+        if (tabBar_->count() > 1)
+            tabBar_->setCurrentIndex((tabBar_->currentIndex() + tabBar_->count() - 1) % tabBar_->count());
+    });
+    previousTab->setShortcuts({QKeySequence(u"Ctrl+Shift+Tab"_s), QKeySequence(u"Ctrl+PgUp"_s)});
     view->addAction(tr("&Search in vault…"), QKeySequence(u"Ctrl+Shift+F"_s), this, [this] {
         leftTabs_->setCurrentWidget(search_);
         search_->focusSearch(editor_->textCursor().selectedText());
@@ -572,6 +635,12 @@ bool MainWindow::openVault(const QString& root, QString* error)
         return false;
     }
     closeNote();
+    syncingTabs_ = true;
+    while (tabBar_->count() > 1)
+        tabBar_->removeTab(1);
+    syncingTabs_ = false;
+    pruneDocuments();
+    viewStates_.clear();
 #ifdef MN_HAVE_AI
     if (assistant_ != nullptr) assistant_->stopIndexing(); // late replies belong to the old vault
 #endif
@@ -621,7 +690,7 @@ void MainWindow::onSnapshot()
     // Link styling depends on the file set.
     if (static_cast<int>(vault_->snapshot().files().size()) != lastFileCount_) {
         lastFileCount_ = static_cast<int>(vault_->snapshot().files().size());
-        if (!note_.path.isEmpty()) editor_->highlighter()->rehighlight();
+        editor_->refreshLinkStyles();
     }
     if (!restoredLastNote_) restoreLastNote();
 }
@@ -630,6 +699,12 @@ void MainWindow::restoreLastNote()
 {
     restoredLastNote_ = true;
     if (!note_.path.isEmpty()) return;
+    if (!startupNote_.isEmpty()) {
+        restoreTabs();
+        openNote(std::exchange(startupNote_, QString()));
+        return;
+    }
+    if (restoreTabs()) return;
     const QString last = QSettings().value(u"lastNote/"_s + IndexStore::vaultId(vault_->root())).toString();
     if (!last.isEmpty() && QFileInfo::exists(vault_->absolutePath(last)))
         openNote(last);
@@ -720,8 +795,11 @@ bool MainWindow::saveNow()
 bool MainWindow::openNote(const QString& path, int line, const QString& subpath, const QString& findText,
                           bool pushHistory)
 {
-    if (center_->currentWidget() == home_ && !path.isEmpty()) center_->setCurrentWidget(editor_);
+    // From the home page, the note behind it was remembered when the page was shown.
+    const bool fromHome = center_->currentWidget() == home_;
+    if (fromHome && !path.isEmpty()) center_->setCurrentWidget(editor_);
     if (path == note_.path && !path.isEmpty()) {
+        syncTabFor(path);
         navigateWithin(line, subpath, findText);
         return true;
     }
@@ -733,46 +811,72 @@ bool MainWindow::openNote(const QString& path, int line, const QString& subpath,
         if (r != QMessageBox::Discard) return false;
     }
     const QString abs = vault_->absolutePath(path);
-    const LoadedText t = loadTextFile(abs);
-    if (t.status == LoadStatus::NotFound || t.status == LoadStatus::ReadError) {
-        QMessageBox::warning(this, tr("Open note"), tr("Couldn't open “%1”: %2").arg(path, t.error));
-        return false;
-    }
-    // Remember where we were.
-    if (pushHistory && !note_.path.isEmpty()) {
-        if (historyIndex_ >= 0 && historyIndex_ < static_cast<int>(history_.size()))
-            history_[static_cast<std::size_t>(historyIndex_)].position = editor_->textCursor().position();
-    }
-    if (!note_.path.isEmpty()) noteWatcher_->removePath(vault_->absolutePath(note_.path));
-
-    hideBanner();
-    note_ = OpenNote{};
-    note_.path = path;
-    note_.format = t.format;
-    note_.loadedRaw = t.raw;
-    note_.diskRaw = t.raw;
-    note_.diskStamp = t.stamp;
-    loading_ = true;
-    editor_->setNotePath(path);
-    const bool exact = editor_->setBuffer(t.text);
-    loading_ = false;
-    editor_->setEnabled(true);
-    note_.readOnly = !t.editable() || !exact || !t.roundTrips;
-    editor_->setReadOnly(note_.readOnly);
-    if (!t.editable()) {
-        showBanner(t.error);
-    } else if (!exact || !t.roundTrips) {
-        showBanner(tr("Read-only: this note has characters the editor can't preserve (CR line endings)."));
+    auto remember = [&] {
+        if (!fromHome) rememberView();
+        if (pushHistory && !note_.path.isEmpty()) {
+            if (historyIndex_ >= 0 && historyIndex_ < static_cast<int>(history_.size()))
+                history_[static_cast<std::size_t>(historyIndex_)].position = editor_->textCursor().position();
+        }
+    };
+    if (docs_.contains(path) && parked_.contains(path)) {
+        // Open in a tab: its document as it was left, undo history included.
+        remember();
+        parkCurrent();
+        note_ = parked_.take(path);
+        loading_ = true;
+        editor_->setNotePath(path);
+        editor_->showDocument(docs_.value(path));
+        loading_ = false;
+        editor_->setEnabled(true);
+        editor_->setReadOnly(note_.readOnly);
+        if (note_.banner.isEmpty())
+            hideBanner();
+        else
+            showBanner(note_.banner);
+        noteWatcher_->addPath(abs);
+        checkOpenNoteOnDisk(); // it may have changed while its tab wasn't shown
     } else {
-        const Frontmatter fm = parseFrontmatter(
-            t.raw.startsWith("\xEF\xBB\xBF") ? QByteArrayView(t.raw).sliced(3) : QByteArrayView(t.raw));
-        if (fm.present && !fm.valid)
-            showBanner(tr("Invalid frontmatter (%1). It won't be changed.").arg(fm.error));
-        else if (t.format.mixedEol)
-            showBanner(tr("This note has mixed line endings. Unedited lines keep theirs."));
+        const LoadedText t = loadTextFile(abs);
+        if (t.status == LoadStatus::NotFound || t.status == LoadStatus::ReadError) {
+            QMessageBox::warning(this, tr("Open note"), tr("Couldn't open “%1”: %2").arg(path, t.error));
+            return false;
+        }
+        remember();
+        parkCurrent();
+        hideBanner();
+        note_ = OpenNote{};
+        note_.path = path;
+        note_.format = t.format;
+        note_.loadedRaw = t.raw;
+        note_.diskRaw = t.raw;
+        note_.diskStamp = t.stamp;
+        QTextDocument* doc = editor_->newDocument();
+        docs_.insert(path, doc);
+        loading_ = true;
+        editor_->setNotePath(path);
+        editor_->showDocument(doc);
+        const bool exact = editor_->setBuffer(t.text);
+        loading_ = false;
+        editor_->setEnabled(true);
+        note_.readOnly = !t.editable() || !exact || !t.roundTrips;
+        editor_->setReadOnly(note_.readOnly);
+        if (!t.editable()) {
+            note_.banner = t.error;
+        } else if (!exact || !t.roundTrips) {
+            note_.banner =
+                tr("Read-only: this note has characters the editor can't preserve (CR line endings).");
+        } else {
+            const Frontmatter fm = parseFrontmatter(
+                t.raw.startsWith("\xEF\xBB\xBF") ? QByteArrayView(t.raw).sliced(3) : QByteArrayView(t.raw));
+            if (fm.present && !fm.valid)
+                note_.banner = tr("Invalid frontmatter (%1). It won't be changed.").arg(fm.error);
+            else if (t.format.mixedEol)
+                note_.banner = tr("This note has mixed line endings. Unedited lines keep theirs.");
+        }
+        if (!note_.banner.isEmpty()) showBanner(note_.banner);
+        editor_->document()->setModified(false);
+        noteWatcher_->addPath(abs);
     }
-    editor_->document()->setModified(false);
-    noteWatcher_->addPath(abs);
 
     if (pushHistory) {
         if (historyIndex_ + 1 < static_cast<int>(history_.size()))
@@ -782,8 +886,11 @@ bool MainWindow::openNote(const QString& path, int line, const QString& subpath,
     }
     tree_->setCurrentIndex(treeModel_->indexForPath(path));
     backlinks_->setNote(path);
-    if (readingMode()) reading_->showNote(path, t.raw);
+    if (readingMode())
+        reading_->showNote(path, encodeText(editor_->bufferText(), note_.format, note_.loadedRaw));
     QSettings().setValue(u"lastNote/"_s + IndexStore::vaultId(vault_->root()), path);
+    syncTabFor(path);
+    pruneDocuments();
     updateTitle();
     updateStatus();
     navigateWithin(line, subpath, findText);
@@ -832,11 +939,12 @@ void MainWindow::navigateWithin(int line, const QString& subpath, const QString&
 void MainWindow::closeNote()
 {
     if (!saveNow()) return;
-    if (!note_.path.isEmpty()) noteWatcher_->removePath(vault_->absolutePath(note_.path));
+    parkCurrent();
     note_ = OpenNote{};
     loading_ = true;
-    editor_->setBuffer(QString());
+    editor_->showDocument(editor_->blankDocument());
     loading_ = false;
+    pruneDocuments();
     editor_->setNotePath({});
     editor_->setEnabled(false);
     backlinks_->setNote({});
@@ -910,7 +1018,13 @@ void MainWindow::reloadFromDisk(const QByteArray& raw)
     const int pos = editor_->textCursor().position();
     const int scroll = editor_->verticalScrollBar()->value();
     loading_ = true;
-    const bool exact = editor_->setBuffer(t.text);
+    // One undoable edit, so the tab's undo history survives a reload.
+    QTextCursor all(editor_->document());
+    all.beginEditBlock();
+    all.select(QTextCursor::Document);
+    all.insertText(t.text);
+    all.endEditBlock();
+    const bool exact = editor_->bufferText() == t.text;
     loading_ = false;
     note_.format = t.format;
     note_.loadedRaw = raw;
@@ -938,16 +1052,22 @@ void MainWindow::followLink(const QString& target, const QString& sourcePath)
     QString sub;
     splitLinkTarget(target, lp, sub);
     if (lp.isEmpty()) {
-        if (sourcePath != note_.path) openNote(sourcePath);
+        if (sourcePath != note_.path) {
+            openInCurrentTab_ = true;
+            openNote(sourcePath);
+            openInCurrentTab_ = false;
+        }
         navigateWithin(-1, sub, {});
         return;
     }
     const Resolution r = vault_->files().resolve(lp, sourcePath);
     if (r.resolved()) {
         const QString path = vault_->files().file(r.file).path;
-        if (classifyPath(path) == FileKind::Note)
+        if (classifyPath(path) == FileKind::Note) {
+            openInCurrentTab_ = true;
             openNote(path, -1, sub);
-        else
+            openInCurrentTab_ = false;
+        } else
             QDesktopServices::openUrl(QUrl::fromLocalFile(vault_->absolutePath(path)));
         return;
     }
@@ -1048,10 +1168,11 @@ void MainWindow::deletePath(const QString& path, bool folder)
         folder ? tr("Move the folder “%1” and everything in it to the system trash?").arg(path)
                : tr("Move “%1” to the system trash?").arg(path));
     if (r != QMessageBox::Yes) return;
-    if (!folder && path == note_.path) {
-        saveNow();
-        closeNote();
-    } else if (folder && paths::isInside(note_.path, path)) {
+    for (int i = tabBar_->count() - 1; i > 0; --i) {
+        const QString p = tabBar_->tabData(i).toString();
+        if (folder ? paths::isInside(p, path) : p == path) closeTab(i);
+    }
+    if (!note_.path.isEmpty() && (folder ? paths::isInside(note_.path, path) : note_.path == path)) {
         saveNow();
         closeNote();
     }
@@ -1152,6 +1273,26 @@ void MainWindow::runRename(const std::vector<Move>& moves, const std::optional<M
             backlinks_->setNote(openPath);
             updateTitle();
         }
+        for (const Move& m : moves) {
+            if (docs_.contains(m.from)) docs_.insert(m.to, docs_.take(m.from));
+            if (parked_.contains(m.from)) {
+                OpenNote n = parked_.take(m.from);
+                n.path = m.to;
+                n.diskStamp = {}; // re-read on activation (links in it may have changed)
+                parked_.insert(m.to, n);
+            }
+        }
+        for (int i = 1; i < tabBar_->count(); ++i) {
+            const QString p = tabBar_->tabData(i).toString();
+            for (const Move& m : moves) {
+                if (m.from != p) continue;
+                tabBar_->setTabData(i, m.to);
+                tabBar_->setTabText(i, paths::linkName(m.to));
+                tabBar_->setTabToolTip(i, m.to);
+                if (viewStates_.contains(p)) viewStates_.insert(m.to, viewStates_.take(p));
+            }
+        }
+        saveTabs();
         vault_->refresh(touched);
         if (folderMove) vault_->rescan();
         if (!r.failed.isEmpty()) {
@@ -1325,7 +1466,10 @@ void MainWindow::goBack()
     if (historyIndex_ <= 0) return;
     history_[static_cast<std::size_t>(historyIndex_)].position = editor_->textCursor().position();
     const HistoryEntry e = history_[static_cast<std::size_t>(--historyIndex_)];
-    if (!openNote(e.path, -1, {}, {}, false)) {
+    openInCurrentTab_ = true;
+    const bool opened = openNote(e.path, -1, {}, {}, false);
+    openInCurrentTab_ = false;
+    if (!opened) {
         ++historyIndex_;
         return;
     }
@@ -1341,7 +1485,10 @@ void MainWindow::goForward()
     if (historyIndex_ >= 0)
         history_[static_cast<std::size_t>(historyIndex_)].position = editor_->textCursor().position();
     const HistoryEntry e = history_[static_cast<std::size_t>(++historyIndex_)];
-    if (!openNote(e.path, -1, {}, {}, false)) {
+    openInCurrentTab_ = true;
+    const bool opened = openNote(e.path, -1, {}, {}, false);
+    openInCurrentTab_ = false;
+    if (!opened) {
         --historyIndex_;
         return;
     }
@@ -1436,15 +1583,217 @@ void MainWindow::openToday()
     editor_->setFocus();
 }
 
+void MainWindow::openWhenReady(const QString& path)
+{
+    if (restoredLastNote_ || !vault_->isOpen()) {
+        openNote(path);
+        return;
+    }
+    startupNote_ = path;
+}
+
 void MainWindow::showHome()
 {
     if (!vault_->isOpen()) return;
     findBar_->hide();
     if (center_->currentWidget() != home_) {
         saveNow();
+        rememberView();
         center_->setCurrentWidget(home_);
     }
+    syncingTabs_ = true;
+    tabBar_->setCurrentIndex(0);
+    syncingTabs_ = false;
+    saveTabs();
     home_->refresh();
+}
+
+// --- tabs --------------------------------------------------------------------------
+
+QStringList MainWindow::openTabs() const
+{
+    QStringList out;
+    for (int i = 1; i < tabBar_->count(); ++i)
+        out.append(tabBar_->tabData(i).toString());
+    return out;
+}
+
+int MainWindow::tabIndexFor(const QString& path) const
+{
+    for (int i = 1; i < tabBar_->count(); ++i) {
+        if (tabBar_->tabData(i).toString() == path) return i;
+    }
+    return -1;
+}
+
+void MainWindow::syncTabFor(const QString& path)
+{
+    int index = tabIndexFor(path);
+    const int current = tabBar_->currentIndex();
+    syncingTabs_ = true;
+    if (index < 0) {
+        if (openInCurrentTab_ && current > 0) {
+            index = current; // the note replaces this tab's note
+            viewStates_.remove(tabBar_->tabData(current).toString());
+        } else {
+            index = current <= 0 ? tabBar_->count() : current + 1;
+            tabBar_->insertTab(index, QString());
+        }
+        tabBar_->setTabData(index, path);
+        tabBar_->setTabText(index, paths::linkName(path));
+        tabBar_->setTabToolTip(index, path);
+    }
+    tabBar_->setCurrentIndex(index);
+    syncingTabs_ = false;
+    saveTabs();
+}
+
+void MainWindow::onTabChanged(int index)
+{
+    if (syncingTabs_) return;
+    if (index <= 0) {
+        showHome();
+        return;
+    }
+    const QString path = tabBar_->tabData(index).toString();
+    if (path == note_.path) {
+        // Back from the home page: the note is still loaded.
+        if (center_->currentWidget() == home_) center_->setCurrentWidget(editor_);
+        restoreView(path);
+        saveTabs();
+        return;
+    }
+    if (!openNote(path)) {
+        syncingTabs_ = true;
+        const int back = note_.path.isEmpty() || homeShown() ? 0 : tabIndexFor(note_.path);
+        tabBar_->setCurrentIndex(std::max(back, 0));
+        syncingTabs_ = false;
+        if (!QFileInfo::exists(vault_->absolutePath(path))) {
+            const int gone = tabIndexFor(path);
+            syncingTabs_ = true;
+            if (gone > 0) tabBar_->removeTab(gone);
+            syncingTabs_ = false;
+            saveTabs();
+        }
+        return;
+    }
+    restoreView(path);
+}
+
+void MainWindow::closeTab(int index)
+{
+    if (index <= 0 || index >= tabBar_->count()) return;
+    const QString path = tabBar_->tabData(index).toString();
+    const bool current = path == note_.path;
+    if (current && !saveNow()) return; // keep it open: the changes couldn't be saved
+    syncingTabs_ = true;
+    tabBar_->removeTab(index);
+    syncingTabs_ = false;
+    viewStates_.remove(path);
+    if (current) {
+        // Its neighbour takes over: the one to the right, else the one to the left.
+        const int next = std::min(index, tabBar_->count() - 1);
+        closeNote();
+        if (next > 0) tabBar_->setCurrentIndex(next);
+    }
+    pruneDocuments();
+    saveTabs();
+}
+
+void MainWindow::parkCurrent()
+{
+    if (note_.path.isEmpty()) return;
+    noteWatcher_->removePath(vault_->absolutePath(note_.path));
+    if (docs_.contains(note_.path)) parked_.insert(note_.path, note_);
+}
+
+void MainWindow::pruneDocuments()
+{
+    // A note without a tab (closed, or replaced by a link) lets go of its document.
+    for (const QString& p : docs_.keys()) {
+        if (p == note_.path || tabIndexFor(p) >= 0) continue;
+        editor_->releaseDocument(docs_.take(p));
+        parked_.remove(p);
+        viewStates_.remove(p);
+    }
+}
+
+bool MainWindow::saveParked(QStringList* failed)
+{
+    bool ok = true;
+    for (auto it = parked_.begin(); it != parked_.end(); ++it) {
+        OpenNote& n = it.value();
+        const QTextDocument* doc = docs_.value(it.key());
+        if (doc == nullptr || n.readOnly) continue;
+        const QByteArray bytes = encodeText(NoteEditor::textOf(doc), n.format, n.loadedRaw);
+        if (bytes == n.diskRaw) continue;
+        const QString abs = vault_->absolutePath(n.path);
+        // Never over a version changed by another program.
+        const WriteResult w = statFile(abs) == n.diskStamp ? writeFileAtomic(abs, bytes)
+                                                           : WriteResult{false, tr("changed on disk")};
+        if (!w.ok) {
+            ok = false;
+            if (failed) failed->append(n.path);
+            continue;
+        }
+        n.diskRaw = bytes;
+        n.diskStamp = statFile(abs);
+    }
+    return ok;
+}
+
+void MainWindow::rememberView()
+{
+    if (note_.path.isEmpty() || center_->currentWidget() == home_) return;
+    viewStates_[note_.path] = {editor_->textCursor().position(), editor_->verticalScrollBar()->value(),
+                               readingMode()};
+}
+
+void MainWindow::restoreView(const QString& path)
+{
+    const auto it = viewStates_.constFind(path);
+    if (it == viewStates_.constEnd()) {
+        if (center_->currentWidget() != editor_ && !readingMode()) center_->setCurrentWidget(editor_);
+        return;
+    }
+    const ViewState v = *it;
+    if (v.reading != readingMode()) setReadingMode(v.reading);
+    QTextCursor c = editor_->textCursor();
+    c.setPosition(std::clamp(v.cursor, 0, editor_->document()->characterCount() - 1));
+    editor_->setTextCursor(c);
+    editor_->verticalScrollBar()->setValue(v.scroll);
+}
+
+void MainWindow::saveTabs()
+{
+    if (syncingTabs_ || !vault_->isOpen()) return;
+    QSettings s;
+    const QString id = IndexStore::vaultId(vault_->root());
+    s.setValue(u"openTabs/"_s + id, openTabs());
+    s.setValue(u"activeTab/"_s + id, tabBar_->currentIndex());
+}
+
+bool MainWindow::restoreTabs()
+{
+    QSettings s;
+    const QString id = IndexStore::vaultId(vault_->root());
+    if (!s.contains(u"openTabs/"_s + id)) return false;
+    const QStringList saved = s.value(u"openTabs/"_s + id).toStringList();
+    const QString active = saved.value(s.value(u"activeTab/"_s + id).toInt() - 1);
+    syncingTabs_ = true;
+    for (const QString& p : saved) {
+        if (tabIndexFor(p) >= 0 || !QFileInfo::exists(vault_->absolutePath(p))) continue;
+        const int i = tabBar_->addTab(paths::linkName(p));
+        tabBar_->setTabData(i, p);
+        tabBar_->setTabToolTip(i, p);
+    }
+    syncingTabs_ = false;
+    const int index = active.isEmpty() ? -1 : tabIndexFor(active);
+    if (index > 0)
+        tabBar_->setCurrentIndex(index);
+    else
+        showHome();
+    return true;
 }
 
 bool MainWindow::homeShown() const
@@ -1816,6 +2165,17 @@ void MainWindow::updateStatus()
 
 void MainWindow::closeEvent(QCloseEvent* e)
 {
+    QStringList failed;
+    if (!saveParked(&failed)) {
+        const auto r = QMessageBox::warning(
+            this, tr("Unsaved changes"),
+            tr("Couldn't save %1. Quit anyway and lose the changes?").arg(failed.join(u", "_s)),
+            QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (r != QMessageBox::Discard) {
+            e->ignore();
+            return;
+        }
+    }
     if (!saveNow()) {
         const auto r = QMessageBox::warning(
             this, tr("Unsaved changes"),
@@ -1836,6 +2196,11 @@ void MainWindow::closeEvent(QCloseEvent* e)
 
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
+    if (o == tabBar_ && e->type() == QEvent::MouseButtonRelease &&
+        static_cast<QMouseEvent*>(e)->button() == Qt::MiddleButton) {
+        closeTab(tabBar_->tabAt(static_cast<QMouseEvent*>(e)->position().toPoint()));
+        return true;
+    }
     // Mouse back/forward buttons navigate history.
     if (e->type() == QEvent::MouseButtonRelease && isActiveWindow()) {
         auto* me = static_cast<QMouseEvent*>(e);

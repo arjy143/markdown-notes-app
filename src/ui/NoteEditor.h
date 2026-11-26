@@ -31,6 +31,17 @@ public:
     void setNotePath(const QString& vaultPath) { notePath_ = vaultPath; }
     const QString& notePath() const { return notePath_; }
     MarkdownHighlighter* highlighter() const { return highlighter_; }
+    // One document per open note, so each keeps its own undo history. A new document
+    // has its own highlighter (themed like the rest) and belongs to the editor until
+    // releaseDocument().
+    QTextDocument* newDocument();
+    void showDocument(QTextDocument* doc);    // makes it the edited document
+    void releaseDocument(QTextDocument* doc); // deletes it (never the shown one)
+    QTextDocument* blankDocument() const { return blank_; }
+    static QString textOf(const QTextDocument* doc); // a document's text with '\n' line breaks
+    // Re-styles links after the vault's files changed (resolved vs unresolved): only
+    // the lines with links, in the shown note now and in the others when shown.
+    void refreshLinkStyles();
 
     // The buffer exactly as it will be saved: block texts joined by '\n'.
     // (QPlainTextEdit::toPlainText() would turn non-breaking spaces into spaces.)
@@ -65,6 +76,7 @@ public:
     void setMaxLineChars(int chars);
 
 Q_SIGNALS:
+    void documentShown(QTextDocument* doc);
     void linkActivated(const QString& target, bool markdown);
     void urlActivated(const QString& url);
     void focusLost();
@@ -104,6 +116,12 @@ private:
 
     VaultService* vault_ = nullptr;
     MarkdownHighlighter* highlighter_ = nullptr;
+    QTextDocument* blank_ = nullptr; // shown when no note is open
+    QList<QTextDocument*> documents_;
+    QSet<QTextDocument*> staleLinks_; // documents whose link styles are out of date
+    QMetaObject::Connection docChanged_;
+    void setUpDocument(QTextDocument* doc);
+    void restyleLinks(QTextDocument* doc);
     QString notePath_;
     QCompleter* completer_ = nullptr;
     QStringListModel* model_ = nullptr;

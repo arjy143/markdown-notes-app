@@ -28,6 +28,7 @@ Packaging: `packaging/linux/build-appimage.sh` (AppImage) and `packaging/windows
 - **Tags:** filter, sort and pin tags; selecting a tag shows its notes grouped by their other tags. Frontmatter properties such as `primary` / `secondary` can count as tags, and with category tags configured, new notes (Ctrl+N) offer them as dropdowns.
 - **Link suggestions:** mentions of note names are underlined while typing; Alt+Enter converts one to a link.
 - **Calendar** (left tab): a dot on each day with a journal note (tagged `journal`, dated by file name or `created`). Click a day to open its note; an empty day offers a new daily note.
+- **Tabs:** Home is the first tab, then one tab per open note. Notes opened from the file tree, search, tags or the quick switcher get a tab; following a link stays in the current tab. Each tab keeps its cursor and reading mode, and open tabs are restored at startup.
 - **Home page** (View › Home, Ctrl+Shift+H; shown when no note is open): today's note and a capture box, active notes (any note with a status; a hub note counts its linked notes and their tasks), tasks due, recently edited notes, categories with their main topics, notes that need properties, and journal notes from this day. Sections are chosen in Vault settings › Home.
 - **Smart lists:** Enter continues a list, Tab / Shift+Tab indent and outdent items, numbered lists renumber themselves, Ctrl+L toggles a checkbox. Alt+Shift+T puts a timestamp (`14:32 - `) at the start of the line.
 - **Smart paste:** a URL pasted over selected text makes a link; rich text from a web page or document is converted to Markdown (Ctrl+Shift+V pastes plain text).
@@ -58,6 +59,8 @@ For llama.cpp, which serves one model per process, set "Embedding server" separa
 | Ctrl+F / Ctrl+H | Find / replace |
 | Alt+D | Today's note |
 | Ctrl+Shift+H | Home page |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
+| Ctrl+W | Close tab |
 | Alt+Shift+T | Timestamp at the start of the line |
 | Ctrl+L | Toggle checkbox |
 | Tab / Shift+Tab | Indent / outdent list items |

@@ -111,7 +111,7 @@ If these presets don't exist yet, create them as part of M0.
 - **M5 – Writing helpers.** Insert template, paste or drop images into the attachment folder, rename/move with confirmed link updates, new note in the configured location.
 - **M6 – Release.** AppImage (Wayland platform plugin, with xcb fallback) and a portable Windows zip (`.exe` + Qt DLLs). Budgets verified on both vaults. Open a copy of the user's vault and check that the count of unresolved links matches Obsidian's.
 
-**Not in v1** (don't build any of these, and don't add abstractions for them): graph view, canvas, Bases, plugins, sync, mobile, live preview, tabs or split panes, spellcheck, macOS packaging.
+**Not in v1** (don't build any of these, and don't add abstractions for them): graph view, canvas, Bases, plugins, sync, mobile, live preview, split panes, spellcheck, macOS packaging.
 
 ## Assistant and semantic search (MN_AI)
 

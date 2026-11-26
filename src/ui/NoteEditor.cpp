@@ -61,19 +61,14 @@ protected:
 
 NoteEditor::NoteEditor(QWidget* parent) : QPlainTextEdit(parent)
 {
-    auto* doc = new QTextDocument(this);
-    doc->setDocumentLayout(new BlockLocalLayout(doc));
-    setDocument(doc);
     setLineWrapMode(QPlainTextEdit::WidgetWidth);
     setTabChangesFocus(false);
     setMouseTracking(true);
     setCenterOnScroll(false);
-    document()->setDocumentMargin(16);
     // The side margins of a narrowed text column are painted like the page.
     setBackgroundRole(QPalette::Base);
     setAutoFillBackground(true);
-    highlighter_ = new MarkdownHighlighter(document());
-    applyTheme();
+    blank_ = newDocument();
 
     model_ = new QStringListModel(this);
     completer_ = new QCompleter(model_, this);
@@ -92,7 +87,7 @@ NoteEditor::NoteEditor(QWidget* parent) : QPlainTextEdit(parent)
     auto later = [this] {
         if (suggestLinks_ && !isReadOnly()) suggestTimer_->start();
     };
-    connect(document(), &QTextDocument::contentsChanged, this, later);
+    showDocument(blank_);
     connect(this, &QPlainTextEdit::cursorPositionChanged, this, [this, later] {
         // Suggestions only cover the cursor's paragraph.
         if (!suggestions_.empty()) {
@@ -104,10 +99,87 @@ NoteEditor::NoteEditor(QWidget* parent) : QPlainTextEdit(parent)
     });
 }
 
+QTextDocument* NoteEditor::newDocument()
+{
+    auto* doc = new QTextDocument(this);
+    doc->setDocumentLayout(new BlockLocalLayout(doc));
+    doc->setDocumentMargin(16);
+    setUpDocument(doc);
+    documents_.append(doc);
+    return doc;
+}
+
+void NoteEditor::setUpDocument(QTextDocument* doc)
+{
+    auto* h = new MarkdownHighlighter(doc);
+    h->setTheme(Theme::fromPalette(palette()), font(), monoFamily_);
+    h->setLinkChecker([this](QStringView lp) {
+        if (vault_ == nullptr) return true;
+        return vault_->files().resolve(lp, notePath_).resolved();
+    });
+}
+
+void NoteEditor::showDocument(QTextDocument* doc)
+{
+    if (doc == nullptr) doc = blank_;
+    if (completer_ != nullptr) completer_->popup()->hide();
+    mode_ = Mode::None;
+    suggestions_.clear();
+    setExtraSelections({});
+    dismissed_.clear();
+    disconnect(docChanged_);
+    if (document() != doc) setDocument(doc);
+    highlighter_ = doc->findChild<MarkdownHighlighter*>(QString(), Qt::FindDirectChildrenOnly);
+    docChanged_ = connect(doc, &QTextDocument::contentsChanged, this, [this] {
+        if (suggestLinks_ && !isReadOnly() && suggestTimer_ != nullptr) suggestTimer_->start();
+    });
+    updateLineMargins();
+    restyleLinks(doc);
+    Q_EMIT documentShown(doc);
+}
+
+void NoteEditor::releaseDocument(QTextDocument* doc)
+{
+    if (doc == nullptr || doc == blank_ || doc == document()) return;
+    documents_.removeAll(doc);
+    staleLinks_.remove(doc);
+    delete doc;
+}
+
+void NoteEditor::refreshLinkStyles()
+{
+    for (QTextDocument* d : std::as_const(documents_))
+        staleLinks_.insert(d);
+    restyleLinks(document());
+}
+
+void NoteEditor::restyleLinks(QTextDocument* doc)
+{
+    if (!staleLinks_.remove(doc)) return;
+    auto* h = doc->findChild<MarkdownHighlighter*>(QString(), Qt::FindDirectChildrenOnly);
+    if (h == nullptr) return;
+    // Link styles only change on lines with links. Restyling a line costs about as much
+    // as a line of a full rehighlight, so when most lines have links, do it all at once.
+    QList<QTextBlock> withLinks;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+        const QString t = b.text();
+        if (t.contains(u"[["_s) || t.contains(u"]("_s)) withLinks.append(b);
+    }
+    if (withLinks.size() * 4 > doc->blockCount()) {
+        h->rehighlight();
+        return;
+    }
+    for (const QTextBlock& b : std::as_const(withLinks))
+        h->rehighlightBlock(b);
+}
+
 void NoteEditor::applyTheme()
 {
     if (highlighter_ == nullptr) return; // palette events arrive during construction
-    highlighter_->setTheme(Theme::fromPalette(palette()), font(), monoFamily_);
+    for (QTextDocument* d : std::as_const(documents_)) {
+        if (auto* h = d->findChild<MarkdownHighlighter*>(QString(), Qt::FindDirectChildrenOnly))
+            h->setTheme(Theme::fromPalette(palette()), font(), monoFamily_);
+    }
 }
 
 void NoteEditor::setMonoFamily(const QString& family)
@@ -150,11 +222,7 @@ void NoteEditor::changeEvent(QEvent* e)
 
 void NoteEditor::setVault(VaultService* vault)
 {
-    vault_ = vault;
-    highlighter_->setLinkChecker([this](QStringView lp) {
-        if (vault_ == nullptr) return true;
-        return vault_->files().resolve(lp, notePath_).resolved();
-    });
+    vault_ = vault; // the highlighters' link checkers read it
     refreshCompletionSources();
 }
 
@@ -305,10 +373,15 @@ static void buildFileItems(VaultService* vault, QStringList& fileItems, QHash<QS
 
 QString NoteEditor::bufferText() const
 {
+    return textOf(document());
+}
+
+QString NoteEditor::textOf(const QTextDocument* doc)
+{
     QString out;
-    out.reserve(document()->characterCount());
+    out.reserve(doc->characterCount());
     bool first = true;
-    for (QTextBlock b = document()->begin(); b.isValid(); b = b.next()) {
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
         if (!first) out += u'\n';
         out += b.text();
         first = false;
